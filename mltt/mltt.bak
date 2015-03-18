@@ -49,7 +49,7 @@
     ;dependency
     [(app (lam-pi fvar vt body) arg)
        (and (hasType? env arg vt)
-            (hasType? (cons-env fvar vt arg env) body t))]    
+            (hasType? (cons-env fvar vt arg env)) body )]    
     [(var vname) #:when (symbol? vname)
                  (eqType? env t (car (find-env vname env)))]
     [_ (match t
