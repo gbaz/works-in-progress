@@ -2,159 +2,137 @@
 (require racket/match)
 
 ; value formers
-(struct lam (var vt body))
-(struct app (fun arg))
-(struct error (errstring))
+(struct lam-pi (var vt body) #:transparent)
+(struct app (fun arg) #:transparent)
 ; primitives
-(struct closure (typ body))
-; dependency
-(struct lam-pi (var vt body))
+(struct closure (typ body) #:transparent)
+(struct trustme (typ body) #:transparent)
 
 ; type formers
-(struct type-fun (dom codom))
+(struct type-fun (dom codom) #:transparent)
 ; one basic type
 (define type-unit 'type-unit)
 ; dependency
-(struct type-pi (var dom codom))
+(struct type-pi (var dom codom) #:transparent)
 (define type-type 'type) ;; inconsistent!
 
-(define (find-env nm env)
-  (match (assoc nm env) [(cons a b) b] [_ #f]))
+; contexts
+(define (find-cxt nm cxt)
+  (match (assoc nm cxt) [(cons a b) b] [_ #f]))
 
-(define (cons-env nm typ env)
-  (cons (cons nm typ) env))
+(define (fresh-var nm cxt)
+  (if (assoc nm cxt) (fresh-var (string->symbol (string-append (symbol->string nm) "'")) cxt) nm))
 
-(define (fresh-var nm env)
-  (if (assoc nm env) (fresh-var (string->symbol (string-append (symbol->string nm) "'")) env) nm))
-
-(define-syntax-rule (extend-env var vt env (newvar newenv) body)
-  (let* ([newvar (fresh-var var env)]
-         [newenv (cons-env newvar vt env)])
+(define-syntax-rule (extend-cxt var vt cxt (newvar newcxt) body)
+  (let* ([newvar (fresh-var var cxt)]
+         [newcxt (cons (cons newvar vt) cxt)])
     body))
 
-(define (type? env t) 
-  (match t
-    [(type-fun a b) (and (type? env a) (type? env b))]
-    [(var vname) #:when (and (symbol? vname) (type? env (find-env vname env))) #t]
+(define/match (reduce cxt body) ; reduction is to whnf, call-by-name
+    [(_ (app (lam-pi var vt  b) arg))
+     (if (hasType? cxt arg vt) (reduce cxt (b arg)) ; the type check is optional. omitting gives nuprl semantics
+         (raise-arguments-error 'bad-type "bad type"
+                                "cxt" cxt "arg" arg "vt" vt))]
+    [(_ (app fun arg)) (if (or (not fun) (symbol? fun))
+                       (raise-arguments-error 'stuck "reduction stuck"
+                                              "app" app "fun" fun "arg" arg)
+                       (reduce cxt (app (red-eval cxt fun) arg)))]
+    [(_ _) body])
+
+(define (red-eval cxt x)
+  (match (reduce cxt x) [(closure typ b) (red-eval cxt (b cxt))] [v v]))
+
+(define (type? cxt t) 
+  (match (red-eval cxt t)
+    [(type-fun a b) (and (type? cxt a) (type? cxt b))]
+    [(? symbol? vname) #:when (type? cxt (find-cxt vname cxt)) #t]
     ['type-unit #t]
     [(type-pi var a b)
-     (and (type? env a) (extend-env var a env (newvar newenv) (type? newenv (b newvar))))]
+     (and (type? cxt a) (extend-cxt var a cxt (newvar newcxt) (type? newcxt (b newvar))))]
     ['type #t]
-    [_ (type?-additional env t)]
+    [t1 (type?-additional cxt t1)]
     ))
 
-(define (hasType? env x1 t)
-  (let ([x (reduce env x1)])
-    (or (match x 
-          [(closure typ body) (eqType? env typ t)]
-          [(var vname) (and (symbol? vname) (eqType? env t (find-env x env)))]
-          )
-        (match t
-          [(type-fun a b)
-           (match x
-             [(lam vn vt body)
-              (and (eqType? env vt a)
-                   (extend-env vn vt env (newvar newenv) (hasType? newenv (body newvar) b)))]
-             [_ #f])]
-          [(var vname) #:when (and (symbol? vname) (find-env vname env))
-           (hasType? env x (find-env vname env))]
-          ['type-unit (null? x)]
-          [(type-pi fvar a b)
-           (match x
-             [(lam-pi vn vt body)
-              (and (eqType? env vt a)
-                   (extend-env vn vt env (newvar newenv) 
-                     (hasType? newenv (body newvar) (reduce newenv (b newvar)))))]
-             [_ #f])]
-          ['type (type? env x)]
-          [_ (hasType?-additional env x t)]))))
-  
-(define (reduce env body)
-  (match body
-    [(app (lam    var vt  b) arg) (let ([redarg (reduce env arg)]
-                                        [redtyp (reduce env vt)])
-                                    (if (hasType? env redarg redtyp) (reduce env (b redarg))
-                                        (raise-arguments-error 'bad-type "bad type" "env" env "redarg" redarg "vt" vt)))]
-    [(app (lam-pi var vt  b) arg) (let ([redarg (reduce env arg)])
-                                    (if (hasType? env redarg vt) (reduce env (b redarg))
-                                        (raise-arguments-error 'bad-pi "bad pi" "env" env "redarg" redarg "vt" vt)))]
-    [(app (error s) arg) (error s)]
-    [(app fun arg) (if (or (not fun) (symbol? fun))
-                       (raise-arguments-error 'stuck "reduction stuck" "app" app "fun" fun "arg" arg)
-                       (reduce env (app (reduce env fun) arg)))]
-    [(closure typ b) (reduce env (b))]    
-    [_ body]
-    ))
+(define (hasType? cxt x1 t1)
+  (match* ((reduce cxt x1) (red-eval cxt t1))
+    [((closure typ b) t) (eqType? cxt typ t)]
+    [((trustme typ b) t) (eqType? cxt typ t)]
+    [((? symbol? x) t) #:when (eqType? cxt t (find-cxt x cxt)) #t]
+    [((lam-pi vn vt body) (type-fun a b))
+     (and (eqType? cxt vt a)
+          (extend-cxt vn vt cxt (newvar newcxt) (hasType? newcxt (body newvar) b)))]
+    [(x 'type-unit) (null? x)]
+    [((lam-pi vn vt body) (type-pi _ a b))
+     (and (eqType? cxt vt a)
+          (extend-cxt vn vt cxt (newvar newcxt) 
+                      (hasType? newcxt (body newvar) (reduce newcxt (b newvar)))))]
+    [(x 'type) (type? cxt x)]
+    [(x t) (hasType?-additional cxt x t)]))
 
-(define (eqType? env t1 t2)
-  (let ([t1v (reduce env t1)]
-        [t2v (reduce env t2)])
-    (match (cons t1v t2v)
-      [(cons (type-fun a b) (type-fun a1 b1))
-       (and (eqType? env a a1) (eqType? env b b1))]
-      [(cons (type-pi v a b) (type-pi v1 a1 b1))
-       (and (eqType? env a a1)
-            (extend-env v a env (newvar newenv) 
-               (eqType? newenv (b newvar) (b1 newvar))))]
-      [(cons (var vname) (var vname1)) #:when (and (symbol? vname) (symbol? vname1))
-         (eq? vname vname1)]
-      [(cons '() '()) #t]
-      [_ #f]
-      )))
+(define (eqType? cxt t1 t2)
+  (match* ((red-eval cxt t1) (red-eval cxt t2))
+    [((type-fun a b) (type-fun a1 b1))
+     (and (eqType? cxt a a1) (eqType? cxt b b1))]
+    [((type-pi v a b) (type-pi v1 a1 b1))
+     (and (eqType? cxt a a1)
+          (extend-cxt v a cxt (newvar newcxt) 
+                      (eqType? newcxt (b newvar) (b1 newvar))))]
+    [((? symbol? vname) (? symbol? vname1)) (eq? vname vname1)]
+    ;[(t (closure ct b)) (eqType? cxt t ct)]
+    [(a b) (and a b (or (eqType?-additional cxt a b)
+                        (begin (printf "not equal\n ~a\n ~a\n cxt: ~a\n" a b cxt) #f)))]))
 
-(define (eqVal? env typ v1 v2)
-  (let ([v1v (reduce env v1)]
-        [v2v (reduce env v2)])
-    (match* (typ v1v v2v)
-      [((type-fun a b) (lam x xt body) (lam y yt body2)) ;verify a = xt = yt
-       (extend-env x xt env (newv newenv)
-                   (eqVal? newenv b (body newv) (body2 newv)))]
-      [((type-pi v a b) (lam-pi x xt body) (lam-pi y yt body2)) ;verify a = xt = yt
-       (extend-env x xt env (newv newenv)
-                   (eqVal? newenv (b newv) (body newv) (body2 newv)))]
-      [('type-unit '() '()) #t]
-      [('type-type a b) (eqType? env a b)]
-      [('type-bool x y) (eq? x y)] ; todo pull this out, make equality extensible
-      [(_ _ _) (raise-arguments-error 'not-eq "no equality at type" "env" env "type" typ "v1" v1v "v2" v2v)]
-      )))
+(define (eqVal? cxt typ v1 v2)
+  (match* ((red-eval cxt typ) (red-eval cxt v1) (red-eval cxt v2))
+    [((type-fun a b) (lam-pi x xt body) (lam-pi y yt body2))
+     (and (eqType? cxt a xt) (eqType? cxt a yt)
+          (extend-cxt x xt cxt (newv newcxt)
+                      (eqVal? newcxt b (body newv) (body2 newv))))]
+    [((type-pi v a b) (lam-pi x xt body) (lam-pi y yt body2))
+     (and (eqType? cxt a xt) (eqType? cxt a yt)
+          (extend-cxt x xt cxt (newv newcxt)
+                      (eqVal? newcxt (b newv) (body newv) (body2 newv))))]
+    [('type-unit '() '()) #t]
+    [('type-type a b) (eqType? cxt a b)]
+    [(_ (? symbol? x) (? symbol? y)) #:when (eq? x y) #t]
+    [(_ (trustme t v) (trustme t1 v1)) (and (eqType? cxt t t1) (equal? v v1))] ;if all else fails use primitive equality
+    [(rtyp x y) (eqVal?-additional cxt rtyp x y)]))
 
 (define type-judgments '())
-(define (type?-additional env t) 
-  (define (iter lst)
-    (match lst
-      [(list-rest p ps) (if (p env t) #t (iter ps))]
-      [_ #f]
-   ))
-  (iter type-judgments))
+(define (type?-additional cxt t)
+  (for/or ([p type-judgments]) (p cxt t)))
 
 (define hasType-judgments '())
-(define (hasType?-additional env x t) 
-  (define (iter lst)
-    (match lst
-      [(list-rest p ps) (if (p env x t) #t (iter ps))]
-      [_ #f]
-   ))
-  (iter hasType-judgments))
+(define (hasType?-additional cxt x t)
+  (for/or ([p hasType-judgments]) (p cxt x t)))
+
+(define eqType-judgments '())
+(define (eqType?-additional cxt t1 t2)
+  (for/or ([p eqType-judgments]) (p cxt t1 t2)))
+
+(define eqVal-judgments '())
+(define (eqVal?-additional cxt typ v1 v2)
+  (for/or ([p eqVal-judgments]) (p cxt typ v1 v2)))
 
 (define apps
   (lambda (fun . args)
     (foldl (lambda (arg acc) (app acc arg)) fun args)))
 
-(define-syntax-rule (tlam  (x t) body) (lam     (quote x) t (lambda (x) body)))
+(define-syntax-rule (lam   (x t) body) (lam-pi  (quote x) t (lambda (x) body)))
 (define-syntax-rule (pi    (x t) body) (lam-pi  (quote x) t (lambda (x) body)))
 (define-syntax-rule (pi-ty (x t) body) (type-pi (quote x) t (lambda (x) body)))
-(define-syntax-rule (close   t body) (closure t (lambda () body)))
+(define-syntax-rule (close    t  body) (closure t body))
 
 (displayln "id-unit: is type, has type")
-(define id-unit (tlam (x type-unit) x))
+(define id-unit (lam (x type-unit) x))
 ; (define id-unit (lam 'x type-unit (lambda (x) x)))
 (define id-unit-type (type-fun type-unit type-unit))
 (type?    '() id-unit-type)
 (hasType? '() id-unit  id-unit-type)
 
 (displayln "id-forall: is type, has type")
-(define id-forall (pi (t type-type) (tlam (x t) x)))
-; (define id-forall (lam-pi 'x type-type (lambda (x) (lam 'y x (lambda (y) y)))))
+(define id-forall (pi (t type-type) (lam (x t) x)))
+; (define id-forall (lam 'x type-type (lambda (x) (lam 'y x (lambda (y) y)))))
 (define id-forall-type (pi-ty (tau type-type) (type-fun tau tau)))
 ; (define id-forall-type (type-pi 'tau type-type (lambda (tau) (type-fun tau tau))))
 (type?    '() id-forall-type)
@@ -166,7 +144,7 @@
 
 (displayln "k-comb: is type, has type")
 (define k-comb 
-  (pi (a type-type) (tlam (x a) (pi (b type-type) (tlam (y b) x)))))
+  (pi (a type-type) (lam (x a) (pi (b type-type) (lam (y b) x)))))
 (define k-comb-type
   (pi-ty (a type-type) (type-fun a (pi-ty (b type-type) (type-fun b a)))))
 
@@ -177,79 +155,272 @@
 (hasType? '() k-comb id-forall-type)
 (hasType? '() id-forall id-unit-type)
 
-(define (new-form type-judgment hasType-judgment)
-  (set! type-judgments (cons type-judgment type-judgments))
-  (set! hasType-judgments (cons hasType-judgment hasType-judgments)))
+(define (new-form type-judgment hasType-judgment eqType-judgment eqVal-judgment)
+  (cond [type-judgment    (set! type-judgments    (cons type-judgment    type-judgments))])
+  (cond [hasType-judgment (set! hasType-judgments (cons hasType-judgment hasType-judgments))])
+  (cond [eqType-judgment  (set! eqType-judgments  (cons eqType-judgment  eqType-judgments))])
+  (cond [eqVal-judgment   (set! eqVal-judgments   (cons eqVal-judgment   eqVal-judgments))])
+  )
 
 ; adding bool
 (define type-bool 'type-bool)
 (new-form 
- (lambda (env t) (eq? t 'type-bool))
- (lambda (env x t) (and (eq? t 'type-bool) (boolean? x)))
- )
+ (lambda (cxt t) (eq? t 'type-bool))
+ (lambda (cxt x t) (and (eq? t 'type-bool) (boolean? x)))
+ #f
+ (lambda (cxt t x y) (and (eq? t 'type-bool) (eq? x y))))
 
-; todo dependify bool-elim
 (define bool-elim
-  (pi (a type-type) (tlam (b type-bool) (tlam (x a) (tlam (y a) (close a (if b x y)))))))
+  (pi (a type-type) (lam (x a) (lam (y a) (lam (b type-bool) (close a (lambda (cxt) (if (red-eval cxt b) x y))))))))
 
 (define bool-induct
-  (pi (p (pi-ty (b type-bool) type-type))
-      (tlam (x (app p #t))
-            (tlam (y (app p #f))
-                  (pi (bl type-bool)
-                      (close (app p bl) (if bl x y)))))))
+  (pi (p (type-fun type-bool type-type))
+  (lam (x (app p #t))
+  (lam (y (app p #f))
+  (pi (bl type-bool)
+  (close (app p bl) (lambda (cxt) (if (red-eval cxt bl) x y))))))))
 
 (displayln "functions on bool")
-(define not-bool (tlam (x type-bool) (apps bool-elim type-bool x #f #t)))
-(reduce '() (app not-bool #t))
-(reduce '() (app not-bool #f))
+(define not-bool (apps bool-elim type-bool #f #t))
+(red-eval '() (app not-bool #t))
+(red-eval '() (app not-bool #f))
 
-(struct type-eq (type v1 v2))
+; adding equality types
+(struct type-eq (type v1 v2) #:transparent)
 (struct val-eq (v1 v2))
+
 (new-form
- (lambda (env t) (match t [(type-eq type v1 v2) 
-                           (and (hasType? env v1 type)
-                                (hasType? env v2 type))] 
-                   [_ #f])) 
- (lambda (env x t)
-   (match t
-     [(type-eq type v1 v2)
-      (eqVal? env type v1 v2)]; we ignore x, admit reflection.
-     [_ #f]))
- ) 
+ (match-lambda**
+  [(cxt (type-eq type v1 v2))
+   (and (hasType? cxt v1 type)
+        (hasType? cxt v2 type))]
+  [(_ _) #f])
+ (match-lambda**
+  [(cxt 'refl (type-eq type v1 v2)) ;note we ignore the refl
+   (eqVal? cxt type v1 v2)]
+  [(_ _ _) #f])
+ (match-lambda**
+  [(cxt (type-eq t1t t1a t1b) (type-eq t2t t2a t2b))
+   (and (eqType? cxt t1t t2t) (eqVal? cxt t1t t1a t2a) (eqVal? cxt t1t t1b t2b))]
+  [(_ _ _) #f])
+ (match-lambda**
+  [(cxt (type-eq t a b) _ _) #t]
+  [(_ _ _ _) #f])
+ )
 
-(displayln "playing with equality")
+;intro
+(define refl (pi (a type-type) (pi (x a) (close (type-eq a x x) (lambda (cxt) 'refl)))))
 
-(define not-not-bool (tlam (x type-bool) (app not-bool (app not-bool x))))
-(define id-bool (tlam (x type-bool) x))
+(define equal-induct
+  (pi (a type-type)
+  (pi (c (pi-ty (x a) (pi-ty (y a) (type-fun (type-eq x y) type-type))))
+  (lam (f (pi-ty (z a) (apps (c z z 'refl))))
+  (pi (m a)
+  (pi (n a)
+  (pi (p (type-eq m n))
+  (close (apps c m n p) (lambda (cxt) (app (red-eval cxt f) m))))))))))
 
-(define not-not-is-id-equality (pi (x type-bool) (type-eq type-bool (app id-bool x) (app not-not-bool x))))
+;todo prove transitivity
 
-;(define (not-not-is-id-equality x) (type-eq type-bool (app id-bool x) (app not-not-bool x)))
-; TODO FIX
+(displayln "proving that for all bool, not (not x) = x")
 
-(hasType? '() 'refl (app not-not-is-id-equality #t))
+(define not-not-bool (lam (x type-bool) (app not-bool (app not-bool x))))
+(define id-bool (lam (x type-bool) x))
 
-(define not-not-is-id-type (pi-ty (x type-bool) (app not-not-is-id-equality x)))
-(type? '() not-not-is-id-type)
+; not-not-is-id
+(define nnii-fam (lam (x type-bool) (type-eq type-bool (app id-bool x) (app not-not-bool x))))
+(hasType? '() nnii-fam (type-fun type-bool type-type))
+(hasType? '() 'refl (app nnii-fam #t))
 
+(define nnii-type (pi-ty (x type-bool) (app nnii-fam x)))
+(define nnii (pi (x type-bool) (apps bool-induct nnii-fam (apps refl type-bool #t) (apps refl type-bool #f) x)))
+(type? '() nnii-type)
+(hasType? '() nnii nnii-type)
 
-;; don't work, why? what's up with bool-induct?
-(define not-not-is-id (pi (x type-bool) (apps bool-induct not-not-is-id-equality 'refl 'refl x)))
-(hasType? '() not-not-is-id not-not-is-id-type)
+(displayln "but we don't have extensional function equality")
+(define nnii-extensional (type-eq (type-fun type-bool type-bool) id-bool not-not-bool))
+(type? '() nnii-extensional)
+(hasType? '() 'refl nnii-extensional) ; we shouldn't even be able to write that refl
 
-; (hasType? '() 'refl (type-eq (type-fun type-bool type-bool) id-bool not-not-bool))
+(displayln "although we do have intensional equality")
+(hasType? '() (apps refl (type-fun type-bool type-bool) not-not-bool) (type-eq (type-fun type-bool type-bool) not-not-bool not-not-bool))
 
+(displayln "and we can add eta as an axiom")
+(define eta-eq
+  (pi (a type-type)
+  (pi (b type-type)
+  (pi (f (type-fun a b))
+  (pi (g (type-fun a b))
+  (pi (prf (pi-ty (x a) (type-eq a (app f x) (app g x))))
+  (trustme (type-eq (type-fun a b) f g) 'refl)))))))
 
-(struct sigma  (val vt snd))
-(struct type-sig (var dom codom))
+(define nnii-extensional-term (apps eta-eq type-bool type-bool id-bool not-not-bool nnii))
+(hasType? '() nnii-extensional-term nnii-extensional)
+(hasType? '() (red-eval '() nnii-extensional-term) nnii-extensional)
+(red-eval '() nnii-extensional-term)
 
-; todo macro for new lambda form
+(displayln "naturals are easy")
+(define type-nat 'type-nat)
+(new-form 
+ (lambda (cxt t) (eq? t 'type-nat))
+ (lambda (cxt x t) (and (eq? t 'type-nat) (exact-integer? x) (>= x 0)))
+ #f
+ (lambda (cxt t x y) (and (eq? t 'type-nat) (eq? x y))))
 
-;     [(type-sig val a b) (and (type? env a) (type? (cons-env val a #f env) b))]
-;      [(type-sig fvar a b)
-;         (match x
-;           [(sigma y yt z) (and (eqType? env yt a) (hasType? y a)
-;                                (hasType? (cons-env fvar a y) (reduce b)))])]
+(define z 0)
+(define succ (lam (x type-nat)
+             (close type-nat (lambda (cxt)
+             (let ([x1 (red-eval cxt x)])
+               (if (number? x1)
+                   (+ x1 1)
+                   (trustme type-nat (cons 'succ x1))))))))
+;             (+ (red-eval cxt x) 1)))))
 
-;todo typeeq should use beta-eq
+(define nat-induct
+  (pi (c (type-fun type-nat type-type))
+  (lam (base (app c z))
+  (lam (induct (pi-ty (n2 type-nat)
+                      (type-fun (app c n2) (app c (app succ n2)))))
+  (pi (n1 type-nat)
+  (close (app c n1) (lambda (cxt) (for/fold ([acc base])
+                                           ([x (in-range (red-eval cxt n1))])
+                                   (apps induct x acc)))))))))
+
+(define double (apps nat-induct (lam (x type-nat) type-nat) z (pi (x type-nat) (lam (n type-nat) (app succ (app succ n))))))
+(red-eval '() (app double (app double (app succ z))))
+
+(define plus (lam (a type-nat)
+             (apps nat-induct (lam (x type-nat) type-nat) a (pi (n type-nat) (lam (n type-nat) (app succ n))))))
+
+(red-eval '() (apps plus 5 5))
+
+(displayln "we can use sigma types, for existential proofs")
+(struct type-sig (a b) #:transparent)
+(define-syntax-rule (sig-ty (x t) body) (type-sig t (lambda (x) body)))
+(new-form 
+ (match-lambda**
+  [(cxt (type-sig a b))
+   (and (type? cxt a)
+        (extend-cxt 'fst a cxt (newv newcxt)
+                    (type? newcxt (b newv))))]
+  [(_ _) #f])
+ (match-lambda**
+  [(cxt (cons x y) (type-sig a b))
+      (and (hasType? cxt x a)
+           (hasType? cxt y (b x)))]
+  [(_ _ _) #f])
+ (match-lambda**
+  [(cxt (type-sig a b) (type-sig a1 b1))
+   (and (eqType? cxt a a1)
+        (extend-cxt 'fst a cxt (newv newcxt)
+                    (eqType? newcxt (b newv) (b1 newv))))]
+  [(_ _ _) #f])
+ (match-lambda** 
+  [(cxt (type-sig a b) (cons x y) (cons x1 y1))
+   (and (eqVal? cxt a x x1)
+        (eqVal? cxt (b x) y y1))]
+  [(_ _ _ _) #f]))
+
+; every number has a successor
+(define has-succ (pi (n type-nat) (cons (app succ n) (apps refl type-nat (app succ n)))))
+(define has-succ-type (pi-ty (n type-nat) (sig-ty (x type-nat) (type-eq type-nat x (app succ n)))))
+(hasType? '() has-succ has-succ-type)
+
+; every inhabitant of unit is equal to '()
+(define unit-induct
+  (pi  (c (type-fun type-unit type-type))
+  (lam (v (app c '()))
+  (pi  (u type-unit)
+  (close (app c u) (lambda (env) v))))))
+(define is-unit (pi (u type-unit) (cons u (apps unit-induct
+                                                (lam (x type-unit) (type-eq type-unit x '()))
+                                                (apps refl type-unit '())
+                                                u))))
+(define is-unit-type (pi-ty (u type-unit) (sig-ty (x type-unit) (type-eq type-unit x '()))))
+(hasType? '() is-unit is-unit-type)
+
+(displayln "we have partial type inference")
+(define (inferType cxt x1)
+  (match (reduce cxt x1)
+    [(closure typ b) typ]
+    [(trustme typ b) typ]
+    [(? symbol? x) #:when (find-cxt x cxt) (find-cxt x cxt)]
+    [(lam-pi vn vt body) 
+     (extend-cxt vn vt cxt (newvar newcxt)
+                 (type-pi newvar vt (lambda (y) (subst y newvar (reduce newcxt (inferType newcxt (body newvar)))))))]
+    ['() type-unit]
+    [(? number? x) type-nat]
+    [(? boolean? x) type-bool]
+    [(cons a b) (type-sig (inferType cxt a) (lambda (arg) (inferType cxt b)))] ; can't infer sigmas in general
+  ; ['refl ...] -- given a plain refl whats its type?
+    ; in both cases, more data in terms can help clean this up...
+    [(? (lambda (x) (type? cxt x))) type-type]
+    ))
+
+(define/match (subst y v x)
+  [(_ _ (? symbol? x)) #:when (eq? x y) y]
+  [(_ _ (closure typ b)) (closure (abs y v typ) (lambda (cxt) (subst y v (b cxt))))]
+  [(_ _ (trustme typ b)) (closure (subst y v typ) (subst y v b))]
+  [(_ _ (lam-pi vn vt body)) (lam-pi vn (subst y v vt) (lambda (arg) (subst y v (body arg))))]
+  [(_ _ (cons a b))       (cons     (subst y v a) (subst y v b))]
+  [(_ _ (type-fun  a b))  (type-fun (subst y v a) (subst y v b))]
+  [(_ _ (type-eq t a b))  (type-eq  (subst y v t) (subst y v a) (subst y v b))]
+  [(_ _ (type-pi av a b)) (type-pi  (subst y v a) (lambda (arg) (subst y v (b arg))))]
+  [(_ _ (type-sig   a b)) (type-sig (subst y v a) (lambda (arg) (subst y v (b arg))))]
+  [(_ _ _) x]
+  )
+
+(define (saturate cxt x)
+  (match (reduce cxt x) 
+    [(closure typ b) (closure (saturate cxt typ) (saturate cxt (red-eval cxt (b cxt))))]
+    [(trustme typ b) (trustme (saturate cxt typ) b)]
+    [(lam-pi vn vt body)
+     (extend-cxt vn vt cxt (newvar newcxt)
+                 (lam-pi vn vt (saturate newcxt (body newvar))))]
+    [(cons a b)       (cons     (saturate cxt a) (saturate cxt b))]
+    [(type-fun   a b) (type-fun (saturate cxt a) (saturate cxt b))]
+    [(type-eq  t a b) (type-eq  (saturate cxt t) (saturate cxt a) (saturate cxt b))]
+    [(type-pi av a b) 
+     (extend-cxt av a cxt (newvar newcxt)
+                 (type-pi newvar (saturate newcxt a) (saturate newcxt (b newvar))))]
+    [(type-sig a b)
+     (extend-cxt 'fst a cxt (newvar newcxt)
+                 (type-sig (saturate newcxt a) (saturate newcxt (b newvar))))]
+    [v v]
+    ))
+
+(saturate '() (inferType '() id-bool))
+(saturate '() (inferType '() not-not-bool))
+(saturate '() (inferType '() nnii))
+(saturate '() (inferType '() (cons #t '())))
+
+(displayln "we can build either from sigma")
+(define (either-type a b) (sig-ty (bl type-bool)
+                                  (apps bool-elim type-type a b bl)))
+(define left  (pi (t type-type) (lam (a t) (cons #t a))))
+(define right (pi (t type-type) (lam (a t) (cons #f a))))
+
+(hasType? '() (apps left type-nat 5) (either-type type-nat type-nat))
+
+(define maybe-zero (pi (n type-nat) (either-type (type-eq type-nat n z) type-bool)))
+(define zero-or-not (apps nat-induct 
+                              (lam (x type-nat) (app maybe-zero x))
+                              (apps left (type-eq type-nat z z) (apps refl type-nat z))
+                              (pi (x type-nat) (lam (y (app maybe-zero x)) (apps right type-bool #f)))))
+
+(hasType? '() (pi (x type-nat) (app zero-or-not x)) (pi-ty (x type-nat) (app maybe-zero x)))
+
+(new-form 
+ (lambda (cxt t) (eq? t 'false))
+ #f
+ #f
+ (lambda (cxt t x y) (eq? t 'false)))
+
+(define absurdity (sig-ty (x type-nat) (type-eq (succ x) z)))
+; (define absurdity-is-absurd 
+
+; heterogeneous equality?
+; false?
+
+; todo cubes?
+; todo universes?
