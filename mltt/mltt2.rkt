@@ -213,7 +213,7 @@
 
 (define equal-induct
   (pi (a type-type)
-  (pi (c (pi-ty (x a) (pi-ty (y a) (type-fun (type-eq x y) type-type))))
+  (pi (c (pi-ty (x a) (pi-ty (y a) (type-fun (type-eq a x y) type-type))))
   (lam (f (pi-ty (z a) (apps (c z z 'refl))))
   (pi (m a)
   (pi (n a)
@@ -416,7 +416,38 @@
  #f
  (lambda (cxt t x y) (eq? t 'false)))
 
-(define absurdity (sig-ty (x type-nat) (type-eq (succ x) z)))
+(define absurdity (type-eq type-bool #t #f))
+
+(define bools-are-distinct 
+  (pi (x type-bool)
+  (pi (y type-bool)
+  (lam (p (type-eq type-bool x y))
+  (apps bool-elim type-type (type-fun (type-eq type-bool x #t) false) (type-fun (type-eq type-bool x #f) false) x)))))
+
+;(lam (absurd absurdity)
+;     (apps equal-induct
+;           type-bool
+;           bools-are-distinct
+;           (lam (x type-bool) (apps bool-induct))
+
+;(define bool-induct
+;  (pi (p (type-fun type-bool type-type))
+;  (lam (x (app p #t))
+;  (lam (y (app p #f))
+;  (pi (bl type-bool)
+;  (close (app p bl) (lambda (cxt) (if (red-eval cxt bl) x y))))))))
+                    
+; (define absurdity (sig-ty (x type-nat) (type-eq (succ x) z)))
+(define equal-induct
+  (pi (a type-type)
+  (pi (c (pi-ty (x a) (pi-ty (y a) (type-fun (type-eq a x y) type-type))))
+  (lam (f (pi-ty (z a) (apps (c z z 'refl))))
+  (pi (m a)
+  (pi (n a)
+  (pi (p (type-eq m n))
+  (close (apps c m n p) (lambda (cxt) (app (red-eval cxt f) m))))))))))
+
+
 ; (define absurdity-is-absurd 
 
 ; heterogeneous equality?
