@@ -27,75 +27,162 @@
   (let* ([newvar (fresh-var var cxt)]
          [newcxt (cons (cons newvar vt) cxt)])
     body))
+          
+; a reduction of a value in a context creates a term where "app" is not in the head position.
+; this is "weak head normal form" call-by-name reduction
+; we call a term in such a form "reduced" or simply a "value"
+(define/match (reduce cxt body)
+  ; To reduce an application of a function to an argument
+  ; we confirm that the argument is compatible with the function
+  ; and we produce the application of the function to the argument
+  ; (if we omit the type check, we get nuprl semantics) 
+  [(_ (app (lam-pi var vt  b) arg))   
+   (if (hasType? cxt arg vt) (reduce cxt (b arg)) 
+       (raise-arguments-error 'bad-type "bad type"
+                              "cxt" cxt "arg" arg "vt" vt "app" (lam-pi var vt b)))]
+  ; To reduce an application of a closure to an argument, we produce a closure
+  ; whose type is the application of the closure type to the argument type
+  ; and whose body is the application of the closure body to the argument
+  [(_ (app (closure ty b) arg))
+   (closure (app-type cxt (red-eval cxt ty) arg) (lambda (cxt) (app (b cxt) arg)))] 
+  ; To reduce an application of anything else to an argument, we first reduce the thing itself
+  ; and then attempt to again reduce the application of the result
+  [(_ (app fun arg)) (if (or (not fun) (symbol? fun))
+                         (raise-arguments-error 'stuck "reduction stuck"
+                                                "fun" fun "arg" arg)
+                         (reduce cxt (app (reduce cxt fun) arg)))]
+  [(_ _) body])
 
-(define/match (reduce cxt body) ; reduction is to whnf, call-by-name
-    [(_ (app (lam-pi var vt  b) arg))
-     (if (hasType? cxt arg vt) (reduce cxt (b arg)) ; the type check is optional. omitting gives nuprl semantics
-         (raise-arguments-error 'bad-type "bad type"
-                                "cxt" cxt "arg" arg "vt" vt))]
-    [(_ (app fun arg)) (if (or (not fun) (symbol? fun))
-                       (raise-arguments-error 'stuck "reduction stuck"
-                                              "app" app "fun" fun "arg" arg)
-                       (reduce cxt (app (red-eval cxt fun) arg)))]
-    [(_ _) body])
-
+; A red-eval of a term in a context creates a term where neither "app" nor "closure" are in the head position
+; we call a term in such a form "evaluated" (or also, where evident, a "value").
 (define (red-eval cxt x)
-  (match (reduce cxt x) [(closure typ b) (red-eval cxt (b cxt))] [v v]))
+  (match (reduce cxt x)
+    ; To red-eval a closure, we red-eval the application of the bbody of the closure to the context
+    [(closure typ b) (red-eval cxt (b cxt))]
+    [v v]))
 
+; An application of a type to a term confirms the term is compatible with the type
+; and if so, removes provides the new type that is the result of applying a term
+; with the type to a term with the type of the argument
+(define/match (app-type cxt fun arg)
+  [(_ (type-fun a b) _)
+   (if (hasType? cxt arg a) b
+       (raise-arguments-error 'bad-type "bad type applying in closure" "cxt" cxt "fun" fun "arg" arg))]
+  [(_ (type-pi a at b) _)
+   (if (hasType? cxt arg a) (b arg)
+       (raise-arguments-error 'bad-type "bad pi type applying in closure" "cxt" cxt "fun" fun "arg" arg))]
+  [(_ _ _) (raise-arguments-error 'bad-type "can't apply non-function type in closure" "cxt" cxt "fun" fun "arg" arg)])
+
+; In all the following, judgment may be read as "verification"
+; and "to judge" may be read as "to verify," "to know" or "two confirm"
+
+; We may judge that an evaluated term is a type by the following rules
 (define (type? cxt t) 
   (match (red-eval cxt t)
+    ; We know a value is a type if we know that it is tagged type-fun
+    ; and furthermore we know that its domain is a type and its codomain is a type
     [(type-fun a b) (and (type? cxt a) (type? cxt b))]
-    [(? symbol? vname) #:when (type? cxt (find-cxt vname cxt)) #t]
+    ; We know a value is a type if it has the symbol 'type-unit
     ['type-unit #t]
+    ; We know a value is a type in a context if it is a symbol and that context assigns it a type of type
+    [(? symbol? vname) #:when (eq? type-type (find-cxt vname cxt)) #t]
+    ; We know a value is a type if we know that it is tagged type-pi
+    ; and furthermore we know that its domain is a type and in a context where
+    ; its domain is assigned the proper type, its body can be assigned the type 'type.
     [(type-pi var a b)
      (and (type? cxt a) (extend-cxt var a cxt (newvar newcxt) (type? newcxt (b newvar))))]
+    ; We know a value is a type if it has the symbol 'type
     ['type #t]
+    ; Or, we know a value is a type if any other rules let us make such a judgment
     [t1 (type?-additional cxt t1)]
     ))
 
+; We may judge that a reduced value has an evaluated type by the following rules
 (define (hasType? cxt x1 t1)
   (match* ((reduce cxt x1) (red-eval cxt t1))
+    ; To know a closure is of a type is to know that the type of the closure is equal to the desired type
     [((closure typ b) t) (eqType? cxt typ t)]
+    ; To know a primitive is of a type is to know the type claimed by the primitive is equal to the desired type
     [((trustme typ b) t) (eqType? cxt typ t)]
+    ; To know that a symbol has a type in a context is to know that the context assigns the symbol a type equal to the desired type
     [((? symbol? x) t) #:when (eqType? cxt t (find-cxt x cxt)) #t]
+    ; To know that a lambda has type function is to know that
+    ; the domain of the function type is equal to the input type of the body and to know that
+    ; in a context where the argument is assigned the proper domain type
+    ; the body in turn has a type of the codomain of the function type
     [((lam-pi vn vt body) (type-fun a b))
      (and (eqType? cxt vt a)
           (extend-cxt vn vt cxt (newvar newcxt) (hasType? newcxt (body newvar) b)))]
+    ; To know that a term has type unit is to know that it is the unit value
     [(x 'type-unit) (null? x)]
+    ; To know that a lambda has type pi is to know that
+    ; the domain of the function type is equal to the input type of the body and to know that
+    ; in a context where the argument is assigned the proper domain type
+    ; the body in turn has a type of the codomain of the function type, as viewed in the same context
     [((lam-pi vn vt body) (type-pi _ a b))
      (and (eqType? cxt vt a)
           (extend-cxt vn vt cxt (newvar newcxt) 
                       (hasType? newcxt (body newvar) (reduce newcxt (b newvar)))))]
+    ; To know that a term has type type is to know that the term may be judged a type
     [(x 'type) (type? cxt x)]
+    ; Or, to know that a term has any other type is to follow any additional rules
+    ; on how we may judge the types of terms
     [(x t) (hasType?-additional cxt x t)]))
 
+; We may judge that two evaluated values are equal as types by the following rules
 (define (eqType? cxt t1 t2)
   (match* ((red-eval cxt t1) (red-eval cxt t2))
+    ; To know two types tagged type-fun are equal is to know that
+    ; they have terms equal as types in their domains and
+    ; they have terms equal as types in their codomains
     [((type-fun a b) (type-fun a1 b1))
      (and (eqType? cxt a a1) (eqType? cxt b b1))]
+    ; To know two types tagged type-pi are equal is to know that
+    ; they have terms equal as types in their domains and
+    ; in a context where their arguments are assigned the proper domain type
+    ; then their codomains also equal as types
     [((type-pi v a b) (type-pi v1 a1 b1))
      (and (eqType? cxt a a1)
           (extend-cxt v a cxt (newvar newcxt) 
                       (eqType? newcxt (b newvar) (b1 newvar))))]
+    ; To know two symbols are equal as types is to know that they are the same symbol
     [((? symbol? vname) (? symbol? vname1)) (eq? vname vname1)]
-    ;[(t (closure ct b)) (eqType? cxt t ct)]
+    ; Or to know any other two values are equal as types is to follow any
+    ; additional rules on how we may judge the equality of terms as types
     [(a b) (and a b (or (eqType?-additional cxt a b)
                         (begin (printf "not equal\n ~a\n ~a\n cxt: ~a\n" a b cxt) #f)))]))
 
+; We may judge that two evaluated values are equal at an evaluated type types by the following rules
 (define (eqVal? cxt typ v1 v2)
   (match* ((red-eval cxt typ) (red-eval cxt v1) (red-eval cxt v2))
+    ; To know two lambda terms are equal at a function type is to know that
+    ; their domains are equal as types to the domain of the function type and
+    ; in a context where their domains are assigned the proper input type
+    ; then their bodies are equal at the type of the codomain
     [((type-fun a b) (lam-pi x xt body) (lam-pi y yt body2))
      (and (eqType? cxt a xt) (eqType? cxt a yt)
           (extend-cxt x xt cxt (newv newcxt)
                       (eqVal? newcxt b (body newv) (body2 newv))))]
+    ; To know two lambda terms are equal at a pi type is to know that
+    ; their domains are equal as types to the domain of the function type and
+    ; in a context where their domains are assigned the proper input type
+    ; then their bodies are equal at the type of the codomain, as viewed in the same context
     [((type-pi v a b) (lam-pi x xt body) (lam-pi y yt body2))
      (and (eqType? cxt a xt) (eqType? cxt a yt)
           (extend-cxt x xt cxt (newv newcxt)
                       (eqVal? newcxt (b newv) (body newv) (body2 newv))))]
-    [('type-unit '() '()) #t]
-    [('type-type a b) (eqType? cxt a b)]
+    ; To know two values are equal at unit type
+    ; requires knowing nothing else -- it is always known
+    [('type-unit _ _) #t]
+    ; To know two values are equal at type type is to know that they are equal as types
+    [('type a b) (eqType? cxt a b)]
+    ; To know two symbols are equal at any type is to know that they are equal as symbols
     [(_ (? symbol? x) (? symbol? y)) #:when (eq? x y) #t]
+    ; To know two primitives are equal at any type is to know their types are equal and know that
+    ; their bodies are equal by primitive recursive comparison
     [(_ (trustme t v) (trustme t1 v1)) (and (eqType? cxt t t1) (equal? v v1))] ;if all else fails use primitive equality
+    ; Or to know any other two values are equal at any other type is to follow any
+    ; additional rules on how we may judge the equality of terms at types
     [(rtyp x y) (eqVal?-additional cxt rtyp x y)]))
 
 (define type-judgments '())
@@ -155,6 +242,12 @@
 (hasType? '() k-comb id-forall-type)
 (hasType? '() id-forall id-unit-type)
 
+; To introduce a new type is to
+; extend the ways to know a value is a type
+; give a way to know a value has that type
+; extend the ways to know two values are equal as types
+; give a way to know two values are equal at that type
+
 (define (new-form type-judgment hasType-judgment eqType-judgment eqVal-judgment)
   (cond [type-judgment    (set! type-judgments    (cons type-judgment    type-judgments))])
   (cond [hasType-judgment (set! hasType-judgments (cons hasType-judgment hasType-judgments))])
@@ -165,14 +258,26 @@
 ; adding bool
 (define type-bool 'type-bool)
 (new-form 
+ ; To know a value is a type may be to know that it is the symbol 'type-bool
  (lambda (cxt t) (eq? t 'type-bool))
+ ; To know a value is of type bool is to know that it is #t or #f
  (lambda (cxt x t) (and (eq? t 'type-bool) (boolean? x)))
+ ; to know a two values are equal as types when the symbol 'type-bool corresponds to a type
+ ; is to compare the symbols, which is already known
  #f
+ ; To know two values are equal at type bool is to know that they are equal as scheme values
  (lambda (cxt t x y) (and (eq? t 'type-bool) (eq? x y))))
 
+; If we are given two terms at a type,
+; then we may produce a term that sends bools to either the first or second of those given terms.
 (define bool-elim
   (pi (a type-type) (lam (x a) (lam (y a) (lam (b type-bool) (close a (lambda (cxt) (if (red-eval cxt b) x y))))))))
 
+; If we know a mapping from bools to types
+; and we know a term of the type that is the image of that function on true
+; and we know a term of the type that is the image of that function on false
+; then we may produce a term that sends bools to either the first or second of those terms
+; at either the first or second of those types
 (define bool-induct
   (pi (p (type-fun type-bool type-type))
   (lam (x (app p #t))
@@ -189,36 +294,61 @@
 (struct type-eq (type v1 v2) #:transparent)
 (struct val-eq (v1 v2))
 
+; TO introduce a new type is to
+; extend the ways to know a value is a type
+; give a way to know a value has that type
+; extend the ways to know two values are equal as types
+; give a way to know two values are equal at that type
+
 (new-form
+ ; To know a value is a type may be to know that
+ ; it is tagged with type-eq and a given type
+ ; to know that its first term is of the appropriate type and
+ ; to know that its second term is of the appropriate type
  (match-lambda**
   [(cxt (type-eq type v1 v2))
    (and (hasType? cxt v1 type)
         (hasType? cxt v2 type))]
   [(_ _) #f])
+ ; To know a value has an equality type is to know that
+ ; the values of equality type can be known equal at the appropriate type
  (match-lambda**
   [(cxt 'refl (type-eq type v1 v2)) ;note we ignore the refl
    (eqVal? cxt type v1 v2)]
   [(_ _ _) #f])
+ ; To know a two types are equal may be to know that
+ ; they are of type-eq and
+ ; they are equalities at the same type and
+ ; their first values are equal at that type
+ ; their second values are equal at that type
  (match-lambda**
   [(cxt (type-eq t1t t1a t1b) (type-eq t2t t2a t2b))
    (and (eqType? cxt t1t t2t) (eqVal? cxt t1t t1a t2a) (eqVal? cxt t1t t1b t2b))]
   [(_ _ _) #f])
+ ; To know if two values are equal at any given equality type
+ ; requires knowing nothing else -- it is always known
  (match-lambda**
   [(cxt (type-eq t a b) _ _) #t]
   [(_ _ _ _) #f])
  )
 
 ;intro
+; if we know a term at a type, we know that the term, at that type, is equal to itself
 (define refl (pi (a type-type) (pi (x a) (close (type-eq a x x) (lambda (cxt) 'refl)))))
 
+; if we know a type
+; and we know a family C which can send two terms at that type and an equality between them to types
+; and know how to produce from a term at a type a value of C as decided by the identity path on our term
+; then we may produce a term that
+; sends two values at a type and an equality between them to the value of C as decided by that path between them
 (define equal-induct
   (pi (a type-type)
   (pi (c (pi-ty (x a) (pi-ty (y a) (type-fun (type-eq a x y) type-type))))
-  (lam (f (pi-ty (z a) (apps (c z z 'refl))))
+  (lam (f (pi-ty (z a) (apps c z z 'refl)))
   (pi (m a)
   (pi (n a)
-  (pi (p (type-eq m n))
-  (close (apps c m n p) (lambda (cxt) (app (red-eval cxt f) m))))))))))
+  (pi (p (type-eq a m n))
+  (close (apps c m n p) (lambda (cxt) (app f m))))))))))
 
 ;todo prove transitivity
 
@@ -270,11 +400,10 @@
 (define z 0)
 (define succ (lam (x type-nat)
              (close type-nat (lambda (cxt)
-             (let ([x1 (red-eval cxt x)])
-               (if (number? x1)
-                   (+ x1 1)
-                   (trustme type-nat (cons 'succ x1))))))))
-;             (+ (red-eval cxt x) 1)))))
+               (let ([x1 (red-eval cxt x)])
+                 (if (number? x1)
+                     (+ x1 1)
+                     (trustme type-nat (cons 'succ x1))))))))
 
 (define nat-induct
   (pi (c (type-fun type-nat type-type))
@@ -365,7 +494,7 @@
   [(_ _ (cons a b))       (cons     (subst y v a) (subst y v b))]
   [(_ _ (type-fun  a b))  (type-fun (subst y v a) (subst y v b))]
   [(_ _ (type-eq t a b))  (type-eq  (subst y v t) (subst y v a) (subst y v b))]
-  [(_ _ (type-pi av a b)) (type-pi  (subst y v a) (lambda (arg) (subst y v (b arg))))]
+  [(_ _ (type-pi av a b)) (type-pi av (subst y v a) (lambda (arg) (subst y v (b arg))))]
   [(_ _ (type-sig   a b)) (type-sig (subst y v a) (lambda (arg) (subst y v (b arg))))]
   [(_ _ _) x]
   )
@@ -410,48 +539,78 @@
 
 (hasType? '() (pi (x type-nat) (app zero-or-not x)) (pi-ty (x type-nat) (app maybe-zero x)))
 
+(displayln "we can introduce a type for falsehood, and use it to show contradiction.")
+(define type-false 'false)
 (new-form 
  (lambda (cxt t) (eq? t 'false))
  #f
  #f
  (lambda (cxt t x y) (eq? t 'false)))
 
-(define absurdity (type-eq type-bool #t #f))
-
-(define bools-are-distinct 
-  (pi (x type-bool)
-  (pi (y type-bool)
-  (lam (p (type-eq type-bool x y))
-  (apps bool-elim type-type (type-fun (type-eq type-bool x #t) false) (type-fun (type-eq type-bool x #f) false) x)))))
-
-;(lam (absurd absurdity)
-;     (apps equal-induct
-;           type-bool
-;           bools-are-distinct
-;           (lam (x type-bool) (apps bool-induct))
-
-;(define bool-induct
-;  (pi (p (type-fun type-bool type-type))
-;  (lam (x (app p #t))
-;  (lam (y (app p #f))
-;  (pi (bl type-bool)
-;  (close (app p bl) (lambda (cxt) (if (red-eval cxt bl) x y))))))))
-                    
-; (define absurdity (sig-ty (x type-nat) (type-eq (succ x) z)))
-(define equal-induct
+(define transport
   (pi (a type-type)
-  (pi (c (pi-ty (x a) (pi-ty (y a) (type-fun (type-eq a x y) type-type))))
-  (lam (f (pi-ty (z a) (apps (c z z 'refl))))
-  (pi (m a)
-  (pi (n a)
-  (pi (p (type-eq m n))
-  (close (apps c m n p) (lambda (cxt) (app (red-eval cxt f) m))))))))))
+  (pi (p (type-fun a type-type))
+  (apps equal-induct
+        a
+        (pi (x a) (pi (y a) (lam (q (type-eq a x y)) (type-fun (app p x) (app p y)))))
+        (pi (z a) (lam (v (app p z)) v))))))
+
+(define trivial-transport (apps transport type-bool (lam (x type-bool) type-nat) #t #t (apps refl type-bool #t)))
+(red-eval '() (app trivial-transport 4))
+
+(define true-is-false (type-eq type-bool #t #f))
+(define bool-to-type (apps bool-elim type-type type-unit type-false))
+
+(define contradiction-implies-false
+  (lam (absurd true-is-false)
+  (apps transport type-bool bool-to-type #t #f absurd '())))
+
+(hasType? '() contradiction-implies-false (type-fun true-is-false type-false))
+(hasType? '() (app contradiction-implies-false (trustme true-is-false 'haha)) type-false)
+(red-eval '() (app contradiction-implies-false (trustme true-is-false 'haha)))
 
 
-; (define absurdity-is-absurd 
+;(define/match (check-universes cxt x)
+;  [(_ (lam-pi vn vt body))
+;   (let/match ([(cons vu vcxt) (check-universes cxt vt)])
+;              (extend-cxt vn vu vcxt (nvar newcxt)
+;                          (check-universes newcxt (body nvar))))]
+  ; if the type is u0 then the body must be u1 iff its type varies based on the type. -- we need to distingush lam, pi
+;  [(_ (cons a b)) '()]; ditto -- if we have dependency then one thing else another.. sigh.
+;  )
+
+
+;(define-syntax-rule (extend-cxt var vt cxt (newvar newcxt) body)
+   
+   
+; todo universes?
+;  (match (reduce cxt x) 
+;    [(closure typ b) (closure (saturate cxt typ) (saturate cxt (red-eval cxt (b cxt))))]
+;    [(trustme typ b) (trustme (saturate cxt typ) b)]
+;    [(lam-pi vn vt body)
+;     (extend-cxt vn vt cxt (newvar newcxt)
+;                 (lam-pi vn vt (saturate newcxt (body newvar))))]
+;    [(cons a b)       (cons     (saturate cxt a) (saturate cxt b))]
+;    [(type-fun   a b) (type-fun (saturate cxt a) (saturate cxt b))]
+;    [(type-eq  t a b) (type-eq  (saturate cxt t) (saturate cxt a) (saturate cxt b))]
+;    [(type-pi av a b) 
+;     (extend-cxt av a cxt (newvar newcxt)
+;                 (type-pi newvar (saturate newcxt a) (saturate newcxt (b newvar))))]
+;    [(type-sig a b)
+;     (extend-cxt 'fst a cxt (newvar newcxt)
+;                 (type-sig (saturate newcxt a) (saturate newcxt (b newvar))))]
+;    [v v]
+;    ))
 
 ; heterogeneous equality?
-; false?
-
+; todo looping y combinator?
 ; todo cubes?
-; todo universes?
+; use codes for types!
+; todo tactics? term is (partial term, full desired type)
+
+; references
+; Simply Easy: http://strictlypositive.org/Easy.pdf
+; Simpler, Easier: http://augustss.blogspot.com/2007/10/simpler-easier-in-recent-paper-simply.html
+; PTS: http://hub.darcs.net/dolio/pts
+; Pi-Forall: https://github.com/sweirich/pi-forall
+
