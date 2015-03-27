@@ -88,7 +88,7 @@
     [(? symbol? vname) #:when (eq? type-type (find-cxt vname cxt)) #t]
     ; We know a value is a type if we know that it is tagged type-pi
     ; and furthermore we know that its domain is a type and in a context where
-    ; its domain is assigned the proper type, its body can be assigned the type 'type.
+    ; its domain is assigned the proper type, its body can send the domain to a type.
     [(type-pi var a b)
      (and (type? cxt a) (extend-cxt var a cxt (newvar newcxt) (type? newcxt (b newvar))))]
     ; We know a value is a type if it has the symbol 'type
@@ -423,27 +423,45 @@
 
 (red-eval '() (apps plus 5 5))
 
+    ; We know a value is a type if we know that it is tagged type-pi
+    ; and furthermore we know that its domain is a type and in a context where
+    ; its domain is assigned the proper type, its body can be assigned the type 'type.
+
 (displayln "we can use sigma types, for existential proofs")
 (struct type-sig (a b) #:transparent)
 (define-syntax-rule (sig-ty (x t) body) (type-sig t (lambda (x) body)))
 (new-form 
+ ; To know a value is a type may be to know that it is tagged type-sig
+ ; and to know that its first element is a type
+ ; and to know that the second element can send terms of the first element to types.
  (match-lambda**
   [(cxt (type-sig a b))
    (and (type? cxt a)
         (extend-cxt 'fst a cxt (newv newcxt)
                     (type? newcxt (b newv))))]
   [(_ _) #f])
+ ; To know a value is of type sigma is to know that it is a pair
+ ; and to know that its first element has the type of the first element of the type
+ ; and to know that its second element has the type that the second element of the type
+ ; sends the first element of the value to.
  (match-lambda**
   [(cxt (cons x y) (type-sig a b))
       (and (hasType? cxt x a)
            (hasType? cxt y (b x)))]
   [(_ _ _) #f])
+ ; To know two values are equal as types may be to know that they are both tagged type-sig
+ ; and that their first elements are equal as types
+ ; and that their second elements send values of the first element to terms that are equal as types
  (match-lambda**
   [(cxt (type-sig a b) (type-sig a1 b1))
    (and (eqType? cxt a a1)
         (extend-cxt 'fst a cxt (newv newcxt)
                     (eqType? newcxt (b newv) (b1 newv))))]
   [(_ _ _) #f])
+ ; To know two values are equal at a sigma type is to know that
+ ; their first elements are equal at the first component of the sigma type
+ ; and their second elements are equal at the type produced by the application of the
+ ; second component of the sigma type to either of their first elements.
  (match-lambda** 
   [(cxt (type-sig a b) (cons x y) (cons x1 y1))
    (and (eqVal? cxt a x x1)
