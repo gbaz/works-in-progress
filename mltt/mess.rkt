@@ -1,4 +1,9 @@
 #lang racket
+; MESS
+; Martin-Löf Extensional Specification and Simulator
+; (c) Gershom Bazerman, 2015
+; BSD(3) Licensed
+
 (require racket/match)
 
 ; value formers
@@ -625,6 +630,28 @@
 ; todo cubes?
 ; use codes for types!
 ; todo tactics? term is (partial term, full desired type)
+
+; a value is a space if it is
+; a collection of basepoints and a sequence of higher paths
+
+; a value is judged to be a type if it
+; is a tag which corresponds to a space _or_
+; is a product of such tags either as a function or a pair _or_
+; it is a tag and a mapping of such tags to values judged as types (as a function or as a pair)
+; is a tag and a pair of values and the index, in their type, of the path between them (an equality type)
+
+; a value is of a space at a level if it is
+; an index into that space at that level (atomic)
+; function value: a space paired with a second space of points, of the same quantity as the first (a zero function space) _or_
+; a value in one space and a value in another space
+
+; two types are equal if... (require path unless trivial)
+
+; two values are equal at a type if... 
+
+; well typed shapes don't go wrong
+
+; to apply
 
 ; references
 ; Simply Easy: http://strictlypositive.org/Easy.pdf
