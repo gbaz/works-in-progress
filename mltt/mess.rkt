@@ -19,7 +19,7 @@
 (define type-unit 'type-unit)
 ; dependency
 (struct type-pi (var dom codom) #:transparent)
-(define type-type 'type) ;; inconsistent!
+(define type-type 'type) ; inconsistent!
 
 ; contexts
 (define (find-cxt nm cxt)
@@ -79,7 +79,7 @@
   [(_ _ _) (raise-arguments-error 'bad-type "can't apply non-function type in closure" "cxt" cxt "fun" fun "arg" arg)])
 
 ; In all the following, judgment may be read as "verification"
-; and "to judge" may be read as "to verify," "to know" or "two confirm"
+; and "to judge" may be read as "to verify," "to know" or "to confirm"
 
 ; We may judge that an evaluated term is a type by the following rules
 (define (type? cxt t) 
@@ -299,12 +299,6 @@
 (struct type-eq (type v1 v2) #:transparent)
 (struct val-eq (v1 v2))
 
-; TO introduce a new type is to
-; extend the ways to know a value is a type
-; give a way to know a value has that type
-; extend the ways to know two values are equal as types
-; give a way to know two values are equal at that type
-
 (new-form
  ; To know a value is a type may be to know that
  ; it is tagged with type-eq and a given type
@@ -428,9 +422,6 @@
 
 (red-eval '() (apps plus 5 5))
 
-    ; We know a value is a type if we know that it is tagged type-pi
-    ; and furthermore we know that its domain is a type and in a context where
-    ; its domain is assigned the proper type, its body can be assigned the type 'type.
 
 (displayln "we can use sigma types, for existential proofs")
 (struct type-sig (a b) #:transparent)
@@ -592,7 +583,36 @@
 (hasType? '() (app contradiction-implies-false (trustme true-is-false 'haha)) type-false)
 (red-eval '() (app contradiction-implies-false (trustme true-is-false 'haha)))
 
-
+(define/match (check-universes cxt t)
+  [(_ (app (lam-pi var vt b) arg))
+    (let*
+        ([au (check-universes cxt arg)]
+         [ru (extend-cxt var au cxt (nvar newcxt)
+                         (check-universes newcxt (b nvar)))])
+      ru)]; todo check compat?
+   [(_ (app (closure ty b) arg)) (error "what")] 
+   [(_ (app fun arg))
+    (check-universes cxt (app (reduce cxt fun) arg))] ; will loop if not careful? need an occurs check!
+   [(_ (type-fun vt body))
+    (let*
+        ([vu (check-universes cxt vt)]
+         [bu (check-universes cxt vt)])
+      (max bu vu))]
+   [(_ (type-pi var vt body))
+   (let*
+       ([vu (check-universes cxt vt)]
+        [bu (extend-cxt var vu cxt (nvar newcxt)
+                        (check-universes newcxt (body nvar)))])
+     (max bu vu))]
+  [(_ type-unit) 0]
+  [(_ type-type) 1]
+  [(_ type-bool) 0]
+  [(_ (? symbol? vname)) #:when (find-cxt vname cxt)
+                     (+ 1 (find-cxt vname cxt))]
+  [(_ _) (error "urk")]
+)
+(check-universes '() nnii-fam)
+(check-universes '() nnii-type)
 ;(define/match (check-universes cxt x)
 ;  [(_ (lam-pi vn vt body))
 ;   (let/match ([(cons vu vcxt) (check-universes cxt vt)])
@@ -602,60 +622,18 @@
 ;  [(_ (cons a b)) '()]; ditto -- if we have dependency then one thing else another.. sigh.
 ;  )
 
+;(define-syntax-rule (extend-cxt var vt cxt (newvar newcxt) body))
 
-;(define-syntax-rule (extend-cxt var vt cxt (newvar newcxt) body)
-   
-   
-; todo universes?
-;  (match (reduce cxt x) 
-;    [(closure typ b) (closure (saturate cxt typ) (saturate cxt (red-eval cxt (b cxt))))]
-;    [(trustme typ b) (trustme (saturate cxt typ) b)]
-;    [(lam-pi vn vt body)
-;     (extend-cxt vn vt cxt (newvar newcxt)
-;                 (lam-pi vn vt (saturate newcxt (body newvar))))]
-;    [(cons a b)       (cons     (saturate cxt a) (saturate cxt b))]
-;    [(type-fun   a b) (type-fun (saturate cxt a) (saturate cxt b))]
-;    [(type-eq  t a b) (type-eq  (saturate cxt t) (saturate cxt a) (saturate cxt b))]
-;    [(type-pi av a b) 
-;     (extend-cxt av a cxt (newvar newcxt)
-;                 (type-pi newvar (saturate newcxt a) (saturate newcxt (b newvar))))]
-;    [(type-sig a b)
-;     (extend-cxt 'fst a cxt (newvar newcxt)
-;                 (type-sig (saturate newcxt a) (saturate newcxt (b newvar))))]
-;    [v v]
-;    ))
+; check universes should just check the type, not the body?
 
-; heterogeneous equality?
-; todo looping y combinator?
-; todo cubes?
-; use codes for types!
-; todo tactics? term is (partial term, full desired type)
-
-; a value is a space if it is
-; a collection of basepoints and a sequence of higher paths
-
-; a value is judged to be a type if it
-; is a tag which corresponds to a space _or_
-; is a product of such tags either as a function or a pair _or_
-; it is a tag and a mapping of such tags to values judged as types (as a function or as a pair)
-; is a tag and a pair of values and the index, in their type, of the path between them (an equality type)
-
-; a value is of a space at a level if it is
-; an index into that space at that level (atomic)
-; function value: a space paired with a second space of points, of the same quantity as the first (a zero function space) _or_
-; a value in one space and a value in another space
-
-; two types are equal if... (require path unless trivial)
-
-; two values are equal at a type if... 
-
-; well typed shapes don't go wrong
-
-; to apply
+; todo?
+; heterogeneous equality
+; looping y combinator?
+; use codes for types
+; tactics -- term is (partial term, full desired type)
 
 ; references
 ; Simply Easy: http://strictlypositive.org/Easy.pdf
 ; Simpler, Easier: http://augustss.blogspot.com/2007/10/simpler-easier-in-recent-paper-simply.html
 ; PTS: http://hub.darcs.net/dolio/pts
 ; Pi-Forall: https://github.com/sweirich/pi-forall
-

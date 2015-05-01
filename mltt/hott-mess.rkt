@@ -20,7 +20,6 @@
 
 ; an application is just a pair of a function and an argument as before
 
-
 ; a value is judged to be a type if it
 ; is a tag which corresponds to a space _or_
 ; is a product of such tags either as a function or a pair _or_
