@@ -20,7 +20,6 @@
 
 ; an application is just a pair of a function and an argument as before
 
-
 ; a value is judged to be a type if it
 ; is a tag which corresponds to a space _or_
 ; is a product of such tags either as a function or a pair _or_
@@ -288,10 +287,21 @@
 (define (add-eqPath eqPaths-judgment)
   (set! eqPaths-judgments (cons eqPaths-judgment eqPaths-judgments)))
 
-(define const-pb (lambda (lvl p) 'refl))
+(struct path (constr pstart pend) #:transparent)
 
-(define-syntax-rule (lam   (x t) body) (lam-pi  (quote x) t (lambda (x) body) const-pb))
-(define-syntax-rule (pi    (x t) body) (lam-pi  (quote x) t (lambda (x) body) const-pb))
+; Correct to use this?
+(define const-pb (lambda (f)
+  (letrec ([go (lambda (lvl p)
+             (if (<= lvl 0)
+                 (path 'refl (f (path-start p) (path-end p)))
+                 (path 'refl (go (- lvl 1) (path-start p)) (go (- lvl 1) (path-end p)))))])
+   go)))
+
+(define refl (pi (a type-type) (pi (x a) 
+               (close (type-eq a x x) (lambda (cxt) (path 'refl (red-eval cxt x) (red-eval cxt x)))))))
+
+(define-syntax-rule (lam   (x t) body) (lam-pi  (quote x) t (lambda (x) body) (const-pb (lambda (x) body))))
+(define-syntax-rule (pi    (x t) body) (lam-pi  (quote x) t (lambda (x) body) (const-pb (lambda (x) body))))
 (define-syntax-rule (pi-ty (x t) body) (type-pi (quote x) t (lambda (x) body)))
 (define-syntax-rule (close    t  body) (closure t body))
 
@@ -301,18 +311,16 @@
   (lambda (fun . args)
     (foldl (lambda (arg acc) (app acc arg)) fun args)))
 
-(define refl (pi (a type-type) (pi (x a) (close (type-eq a x x) (lambda (cxt) 'refl)))))
-
 
 (add-isPath
  (match-lambda**
-  [(cxt typ 'refl v1 v2)
+  [(cxt typ (path 'refl _ _) v1 v2)
    (eqVal? cxt typ v1 v2)]
   [(_ _ _ _ _) #f]))
 
 (add-eqPath
  (match-lambda**
-  [(cxt typ v1 v2 'refl 'refl)
+  [(cxt typ v1 v2 (path 'refl _ _) (path 'refl _ _))
    #t]
   [(_ _ _ _ _ _) #f]))
 
@@ -326,38 +334,63 @@
  
 (add-isPath
  (match-lambda**
-  [(cxt 'type-s1 'loop-s1 v1 v2)
-   #t]
+  [(cxt 'type-s1 (path 'loop-s1 _ _) v1 v2) #t]
+  [(_ _ _ _ _) #f]))
+
+; Explicit groupoids.
+
+(struct inv (p) #:transparent)
+
+(define/match (path-start p)
+  [('()) 'any] ; error -- path-start on nil
+  [((path _ s _)) s]
+  [((inv p)) (path-end p)]
+  [((cons p _)) (path-start p)]
+  )
+
+(define/match (path-end p)
+  [('()) 'any] ; error -- path-end on nil
+  [((path _ _ e)) e]
+  [((inv p)) (path-start p)]
+  [((cons p '())) (path-end p)]
+  [((cons _ ps))  (path-end ps)]
+  )
+
+(add-eqPath
+ (match-lambda**
+  [(cxt 'type-s1 t1 t2 (path 'loop-s1 _ _) (path 'loop-s1 _ _)) #t]
+  [(_ _ _ _ _ _) #f]))
+
+(add-isPath
+ (match-lambda**
+  [(cxt typ '() v1 v2) #t]
+  [(cxt typ (cons p '()) v1 v2)
+   (isPath? cxt typ p v1 v2)]
+  [(cxt typ (cons p ps) v1 v2)
+   (and (isPath? cxt typ p v1 (path-start ps))
+        (isPath? cxt typ ps (path-end p) v2))]
+  [(_ _ _ _ _) #f]))
+
+(add-isPath
+ (match-lambda**
+  [(cxt typ (inv p) v1 v2) (isPath? cxt typ p v2 v1)]
   [(_ _ _ _ _) #f]))
 
 (add-eqPath
  (match-lambda**
-  [(cxt 'type-s1 t1 t2 'loop 'loop)
-   #t]
+  [(cxt typ v1 v2 '() '()) #t]
+  [(cxt typ v1 v2 (cons p ps) (cons p1 ps1))
+   (and (eqPaths? cxt typ v1 (path-start ps) p p1) 
+        (eqPaths? cxt typ (path-end p) v2 ps ps1))]
   [(_ _ _ _ _ _) #f]))
 
-
-(add-isPath
+(add-eqPath
  (match-lambda**
-  [(cxt typ () v1 v2) #f]
-  [(cxt typ (cons p ps) v1 v2)
-   (and (isPath? cxt typ p v1 'any)
-        (isPath? cxt typ ps 'any v2))]
-  [(_ _ _ _ _) #f]))
+  [(cxt typ v1 v2 (inv p) (inv p1))
+   (eqPaths? cxt typ v2 v1 p p1)]
+  [(_ _ _ _ _ _) #f]))
 
-(add-isPath
- (match-lambda**
-  [(cxt typ (inv p) v1 v2) (isPath? cxt typ p v2 v1)]))
-
-; eqPath for cons and inv...
-
-; turns the path into a function and applies it... somehow.
-(define/match (apply-path p x)
-  [(()) x]
-  [('refl _) x]
-  [('loop-s1 _) x]
-  [(cons p ps) (apply-path ps (apply-path p x))]
-  )
+; todo axioms for refl-intro/elim, inversion, concatination?
 
 (define equal-induct
   (pi (a type-type)
@@ -367,8 +400,10 @@
 
   (pi (c (pi-ty (x a) (pi-ty (y a) (type-fun (type-eq a x y) type-type))))
   (lam (f (pi-ty (z a) (apps c z z 'refl)))
-; ignores m-eq-n
- (close (apps c m n m-eq-n) (lambda (cxt) (app f m))))))))))
+   ; ignores m-eq-n
+  (close (apps c m n m-eq-n) (lambda (cxt) (app f m))))))))))
+
+;HALP
 
 ;(close (apps c m n m-eq-n) 
 ;         (lambda (cxt)
@@ -386,10 +421,21 @@
 ; ignores x-eq-y
 ;  (close (app p y) (lambda (cxt) px)))))))))
   (close (app p y)
-  (lambda (cxt) (apply-path (app-n (red-eval cxt p) 1 (red-eval cxt x-eq-y)) px))))))))))
+  (lambda (cxt) (transport-val (app-n (red-eval cxt p) 1 (red-eval cxt x-eq-y)) px))))))))))
+
+; Takes a path between types and picks out a fiber across which we transport a particular val
+(define/match (transport-val p x)
+  [('() _) x]
+  [((path _ _ _) _) x] 
+  [((cons p ps) _) (transport-val ps (transport-val p x))]
+  [((inv '()) _ ) x]
+  [((inv (path _ _ _)) _) x]
+  [((inv (cons p ps)) _) (transport-val (inv p) (transport-val (inv ps) x))])
 
 
-; define explicit path-compose, path-inv, list of paths
+; todo add UA?
+
+
 
 ; x - x-eq-y -> y 
 ; |             |
@@ -409,16 +455,9 @@
   (close (type-eq type-type (app p x) (app p y))
   (lambda (cxt) (app-n (red-eval cxt p) 1 (red-eval cxt x-eq-y))))))))))
 
-;(define/match (app-to-path cxt f p)
-;  [(_ (lam-pi v vt body pb) _) (pb 0 p)]
-;  [(_ _ _) (raise-arguments-error 'app-path-failure "can't apply that to a path"
- ;                                 "cxt" cxt "f" f "p" p)])
-
-;(define/match (fill-path cxt path fam)
-;  [(cxt 'refl f) 'refl]
-;  [(cxt 'loop-s1 f) (app-path cxt (red-eval cxt fam) 'loop-s1)])
-
-; body doesn't just produce a value, but can produce paths...
+; TODO interval
+; TODO contraction
+; TODO derive J
 
 ; do ap
 ; do apd
@@ -428,7 +467,6 @@
 
 ; TODO compute paths
     
-
 
 
 (displayln "id-unit: is type, has type")
