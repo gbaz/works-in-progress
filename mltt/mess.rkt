@@ -1,6 +1,6 @@
 #lang racket
 ; MESS
-; Martin-Löf Extensional Specification and Simulator
+; Martin-Löf Extensible Specification and Simulator
 ; (c) Gershom Bazerman, 2015
 ; BSD(3) Licensed
 
@@ -52,6 +52,7 @@
    (closure (app-type cxt (red-eval cxt ty) arg) (lambda (cxt) (app (b cxt) arg)))]
   ; To reduce an application of anything else to an argument, we first reduce the thing itself
   ; and then attempt to again reduce the application of the result
+
   [(_ (app fun arg)) (if (or (not fun) (symbol? fun))
                          (raise-arguments-error 'stuck "reduction stuck"
                                                 "fun" fun "arg" arg)
@@ -62,7 +63,7 @@
 ; we call a term in such a form "evaluated" (or also, where evident, a "value").
 (define (red-eval cxt x)
   (match (reduce cxt x)
-    ; To red-eval a closure, we red-eval the application of the bbody of the closure to the context
+    ; To red-eval a closure, we red-eval the application of the body of the closure to the context
     [(closure typ b) (red-eval cxt (b cxt))]
     [v v]))
 
@@ -375,15 +376,15 @@
 (hasType? '() (apps refl (type-fun type-bool type-bool) not-not-bool) (type-eq (type-fun type-bool type-bool) not-not-bool not-not-bool))
 
 (displayln "and we can add eta as an axiom")
-(define eta-eq
+(define eta-axiom
   (pi (a type-type)
   (pi (b type-type)
   (pi (f (type-fun a b))
   (pi (g (type-fun a b))
   (pi (prf (pi-ty (x a) (type-eq a (app f x) (app g x))))
-  (trustme (type-eq (type-fun a b) f g) 'refl)))))))
+  (trustme (type-eq (type-fun a b) f g) 'eta-axiom)))))))
 
-(define nnii-extensional-term (apps eta-eq type-bool type-bool id-bool not-not-bool nnii))
+(define nnii-extensional-term (apps eta-axiom type-bool type-bool id-bool not-not-bool nnii))
 (hasType? '() nnii-extensional-term nnii-extensional)
 (hasType? '() (red-eval '() nnii-extensional-term) nnii-extensional)
 (red-eval '() nnii-extensional-term)
@@ -582,6 +583,7 @@
 (hasType? '() (app contradiction-implies-false (trustme true-is-false 'haha)) type-false)
 (red-eval '() (app contradiction-implies-false (trustme true-is-false 'haha)))
 
+<<<<<<< Updated upstream
 (define/match (check-universes cxt t)
   [(_ (app (lam-pi var vt b) arg))
     (let*
@@ -598,28 +600,105 @@
          [bu (check-universes cxt vt)])
       (max bu vu))]
    [(_ (type-pi var vt body))
+=======
+; Todo write univalence as axiom
+
+(struct pair-ty (fst snd) #:transparent)
+
+(define (fun-compose a f g)
+  (lam (x a) (app f (app g a))))
+
+(define (type-homotopy a p f g)
+  (pi (x a) (type-eq (app p x) (app f x) (app g x))))
+
+(define (type-isequiv a b f)
+  (pair-ty 
+   (sig-ty (g (type-fun b a)) (type-homotopy b (lam (x a) b) (fun-compose b f g) (lam (x b) x)))
+   (sig-ty (h (type-fun b a)) (type-homotopy a (lam (x b) a) (fun-compose a h f) (lam (x a) x)))))
+  
+(define (type-equiv a b)
+  (sig-ty (f (type-fun a b)) (type-isequiv a b f)))
+
+(define univalence-axiom (pi (a type-type) (pi (b type-type)
+  (trustme (type-equiv (type-equiv a b) (type-eq type-type a b)) 'ua))))
+
+
+(define/match (check-univ cxt x t) ; todo red-eval t
+  [(_ (app (lam-pi var vt b) arg) _)
    (let*
-       ([vu (check-universes cxt vt)]
-        [bu (extend-cxt var vu cxt (nvar newcxt)
-                        (check-universes newcxt (body nvar)))])
-     (max bu vu))]
-  [(_ type-unit) 0]
-  [(_ type-type) 1]
-  [(_ type-bool) 0]
-  [(_ (? symbol? vname)) #:when (find-cxt vname cxt)
-                     (+ 1 (find-cxt vname cxt))]
-  [(_ _) (error "urk")]
+       ([arg-univ (check-univ cxt arg vt)]
+        [result-univ (extend-cxt var (car arg-univ) (cdr arg-univ) (nvar newcxt)
+                                 (check-univ newcxt (b nvar) t))])
+     (cons (car result-univ)
+           (cdr (check-univ (cdr result-univ) t type-type))))]
+  [(_ (app (closure ty b) arg) _) (error "what")]
+  [(_ (app fun arg) _)
+    (check-univ cxt (app (reduce cxt fun) arg))] ; will loop if not careful? need an occurs check!
+  [(_ (type-fun a b) _)
+   (let*
+       ([vu (check-univ cxt a type-type)]
+        [bu (check-univ (cdr vu) b type-type)])
+     (cons (cons (car vu) (car bu))
+           (cdr (check-univ (cdr bu) t type-type))))]          
+  [(_ (type-pi var vt body) _)
+   (let*
+       ([vu (check-univ cxt vt type-type)]
+        [bu (extend-cxt var (car vu) (cdr vu) (nvar newcxt)
+                        (check-univ newcxt (body nvar) type-type))])
+     (cons (cons (car vu) (car bu))
+           (cdr (check-univ (cdr bu) t type-type))))]
+  [(_ type-unit _) (cons 0 cxt)]
+  [(_ type-bool _) (cons 0 cxt)]
+  [(_ type-type _) (extend-cxt 't 0 cxt (nvar newcxt)
+                               (cons nvar newcxt))]
+  [(_ (? symbol? vname) _) #:when (find-cxt vname cxt)
+                         (cons vname cxt)]
+  [(_ _ _) (error "urk")]
 )
-(check-universes '() nnii-fam)
-(check-universes '() nnii-type)
-;(define/match (check-universes cxt x)
-;  [(_ (lam-pi vn vt body))
-;   (let/match ([(cons vu vcxt) (check-universes cxt vt)])
-;              (extend-cxt vn vu vcxt (nvar newcxt)
-;                          (check-universes newcxt (body nvar))))]
-  ; if the type is u0 then the body must be u1 iff its type varies based on the type. -- we need to distingush lam, pi
-;  [(_ (cons a b)) '()]; ditto -- if we have dependency then one thing else another.. sigh.
-;  )
+
+(struct maxs (x y) #:transparent)
+
+(define/match (check-u cxt x)
+  [(_ (lam-pi a at body))
+   (let*
+       ([au (check-u cxt at)]
+        [vu (check-u (cons (cons a (car au)) (cdr au)) a)]
+        [bu (extend-cxt a (car vu) (cdr vu) (nvar newcxt)
+            (check-u newcxt (body nvar)))])
+     (cons (maxs (car bu) (car vu)) (cdr bu)))]
+  [(_ (app fun arg))
+   (let*
+       ([funu (check-u cxt fun)]
+        [argu (check-u (cdr funu) arg)])
+     (cons (car funu) (cons (cons (car funu) (car argu)) (cdr argu))))]
+  [(_ (? symbol? vname)) #:when (find-cxt vname cxt)
+                         (cons vname cxt)]
+  [(_ x) (cons 0 cxt)])
+
+(check-u '() (lam (x type-type) (lam (y x) (lam (z y) x))))
+
+;(define fam1 (lam (x type-bool) type-unit))
+
+;(check-u '() fam1)
+;(check-u '() (lam (x type-bool) (app fam1 x)))
+
+
+
+;(check-univ '() nnii-fam type-type)
+;(check-univ '() nnii-type type-type)
+(define weirdid
+  (app (lam (q (type-fun type-type type-type)) q) (lam (y type-type) y)))
+(define type-weirdid
+  (type-fun type-type type-type))
+;(check-u '() weirdid)
+; (check-u '() nnii)
+;(saturate '() (inferType '() weirdid))
+;(hasType? '() weirdid type-weirdid)
+;(check-univ '() weirdid type-weirdid)
+
+
+;(check-universes '() nnii-fam)
+;(check-universes '() nnii-type)
 
 ;(define-syntax-rule (extend-cxt var vt cxt (newvar newcxt) body))
 
