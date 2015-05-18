@@ -32,7 +32,7 @@
   (let* ([newvar (fresh-var var cxt)]
          [newcxt (cons (cons newvar vt) cxt)])
     body))
-          
+
 ; a reduction of a value in a context creates a term where "app" is not in the head position.
 ; this is "weak head normal form" call-by-name reduction
 ; we call a term in such a form "reduced" or simply a "value"
@@ -40,16 +40,16 @@
   ; To reduce an application of a function to an argument
   ; we confirm that the argument is compatible with the function
   ; and we produce the application of the function to the argument
-  ; (if we omit the type check, we get nuprl semantics) 
-  [(_ (app (lam-pi var vt  b) arg))   
-   (if (hasType? cxt arg vt) (reduce cxt (b arg)) 
+  ; (if we omit the type check, we get nuprl semantics)
+  [(_ (app (lam-pi var vt  b) arg))
+   (if (hasType? cxt arg vt) (reduce cxt (b arg))
        (raise-arguments-error 'bad-type "bad type"
                               "cxt" cxt "arg" arg "vt" vt "app" (lam-pi var vt b)))]
   ; To reduce an application of a closure to an argument, we produce a closure
   ; whose type is the application of the closure type to the argument type
   ; and whose body is the application of the closure body to the argument
   [(_ (app (closure ty b) arg))
-   (closure (app-type cxt (red-eval cxt ty) arg) (lambda (cxt) (app (b cxt) arg)))] 
+   (closure (app-type cxt (red-eval cxt ty) arg) (lambda (cxt) (app (b cxt) arg)))]
   ; To reduce an application of anything else to an argument, we first reduce the thing itself
   ; and then attempt to again reduce the application of the result
   [(_ (app fun arg)) (if (or (not fun) (symbol? fun))
@@ -82,7 +82,7 @@
 ; and "to judge" may be read as "to verify," "to know" or "to confirm"
 
 ; We may judge that an evaluated term is a type by the following rules
-(define (type? cxt t) 
+(define (type? cxt t)
   (match (red-eval cxt t)
     ; We know a value is a type if we know that it is tagged type-fun
     ; and furthermore we know that its domain is a type and its codomain is a type
@@ -126,7 +126,7 @@
     ; the body in turn has a type of the codomain of the function type, as viewed in the same context
     [((lam-pi vn vt body) (type-pi _ a b))
      (and (eqType? cxt vt a)
-          (extend-cxt vn vt cxt (newvar newcxt) 
+          (extend-cxt vn vt cxt (newvar newcxt)
                       (hasType? newcxt (body newvar) (reduce newcxt (b newvar)))))]
     ; To know that a term has type type is to know that the term may be judged a type
     [(x 'type) (type? cxt x)]
@@ -148,7 +148,7 @@
     ; then their codomains also equal as types
     [((type-pi v a b) (type-pi v1 a1 b1))
      (and (eqType? cxt a a1)
-          (extend-cxt v a cxt (newvar newcxt) 
+          (extend-cxt v a cxt (newvar newcxt)
                       (eqType? newcxt (b newvar) (b1 newvar))))]
     ; To know two symbols are equal as types is to know that they are the same symbol
     [((? symbol? vname) (? symbol? vname1)) (eq? vname vname1)]
@@ -235,7 +235,7 @@
 (hasType? '() (apps id-forall type-unit '()) type-unit)
 
 (displayln "k-comb: is type, has type")
-(define k-comb 
+(define k-comb
   (pi (a type-type) (lam (x a) (pi (b type-type) (lam (y b) x)))))
 (define k-comb-type
   (pi-ty (a type-type) (type-fun a (pi-ty (b type-type) (type-fun b a)))))
@@ -262,7 +262,7 @@
 
 ; adding bool
 (define type-bool 'type-bool)
-(new-form 
+(new-form
  ; To know a value is a type may be to know that it is the symbol 'type-bool
  (lambda (cxt t) (eq? t 'type-bool))
  ; To know a value is of type bool is to know that it is #t or #f
@@ -390,7 +390,7 @@
 
 (displayln "naturals are easy")
 (define type-nat 'type-nat)
-(new-form 
+(new-form
  (lambda (cxt t) (eq? t 'type-nat))
  (lambda (cxt x t) (and (eq? t 'type-nat) (exact-integer? x) (>= x 0)))
  #f
@@ -422,11 +422,10 @@
 
 (red-eval '() (apps plus 5 5))
 
-
 (displayln "we can use sigma types, for existential proofs")
 (struct type-sig (a b) #:transparent)
 (define-syntax-rule (sig-ty (x t) body) (type-sig t (lambda (x) body)))
-(new-form 
+(new-form
  ; To know a value is a type may be to know that it is tagged type-sig
  ; and to know that its first element is a type
  ; and to know that the second element can send terms of the first element to types.
@@ -458,7 +457,7 @@
  ; their first elements are equal at the first component of the sigma type
  ; and their second elements are equal at the type produced by the application of the
  ; second component of the sigma type to either of their first elements.
- (match-lambda** 
+ (match-lambda**
   [(cxt (type-sig a b) (cons x y) (cons x1 y1))
    (and (eqVal? cxt a x x1)
         (eqVal? cxt (b x) y y1))]
@@ -488,7 +487,7 @@
     [(closure typ b) typ]
     [(trustme typ b) typ]
     [(? symbol? x) #:when (find-cxt x cxt) (find-cxt x cxt)]
-    [(lam-pi vn vt body) 
+    [(lam-pi vn vt body)
      (extend-cxt vn vt cxt (newvar newcxt)
                  (type-pi newvar vt (lambda (y) (subst y newvar (reduce newcxt (inferType newcxt (body newvar)))))))]
     ['() type-unit]
@@ -514,7 +513,7 @@
   )
 
 (define (saturate cxt x)
-  (match (reduce cxt x) 
+  (match (reduce cxt x)
     [(closure typ b) (closure (saturate cxt typ) (saturate cxt (red-eval cxt (b cxt))))]
     [(trustme typ b) (trustme (saturate cxt typ) b)]
     [(lam-pi vn vt body)
@@ -523,7 +522,7 @@
     [(cons a b)       (cons     (saturate cxt a) (saturate cxt b))]
     [(type-fun   a b) (type-fun (saturate cxt a) (saturate cxt b))]
     [(type-eq  t a b) (type-eq  (saturate cxt t) (saturate cxt a) (saturate cxt b))]
-    [(type-pi av a b) 
+    [(type-pi av a b)
      (extend-cxt av a cxt (newvar newcxt)
                  (type-pi newvar (saturate newcxt a) (saturate newcxt (b newvar))))]
     [(type-sig a b)
@@ -546,7 +545,7 @@
 (hasType? '() (apps left type-nat 5) (either-type type-nat type-nat))
 
 (define maybe-zero (pi (n type-nat) (either-type (type-eq type-nat n z) type-bool)))
-(define zero-or-not (apps nat-induct 
+(define zero-or-not (apps nat-induct
                               (lam (x type-nat) (app maybe-zero x))
                               (apps left (type-eq type-nat z z) (apps refl type-nat z))
                               (pi (x type-nat) (lam (y (app maybe-zero x)) (apps right type-bool #f)))))
@@ -555,7 +554,7 @@
 
 (displayln "we can introduce a type for falsehood, and use it to show contradiction.")
 (define type-false 'false)
-(new-form 
+(new-form
  (lambda (cxt t) (eq? t 'false))
  #f
  #f
@@ -590,7 +589,7 @@
          [ru (extend-cxt var au cxt (nvar newcxt)
                          (check-universes newcxt (b nvar)))])
       ru)]; todo check compat?
-   [(_ (app (closure ty b) arg)) (error "what")] 
+   [(_ (app (closure ty b) arg)) (error "what")]
    [(_ (app fun arg))
     (check-universes cxt (app (reduce cxt fun) arg))] ; will loop if not careful? need an occurs check!
    [(_ (type-fun vt body))
