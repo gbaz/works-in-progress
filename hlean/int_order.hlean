@@ -24,7 +24,7 @@ protected definition prio : num := num.pred std.priority.default
 -- Main
 private definition nonneg (a : ℤ) : Type.{0} := int.cases_on a (take n, unit) (take n, empty)
 definition le (a b : ℤ) : Type.{0} := nonneg (b - a)
-definition lt (a b : ℤ) : Type.{0} := le (int.add a (of_nat (nat.succ nat.zero))) b -- TODO note the terribleness here, required for lt.elim
+definition lt (a b : ℤ) : Type.{0} := le (int.add a (of_nat (nat.succ nat.zero))) b
 
 infix [priority int.prio] - := int.sub
 infix [priority int.prio] <= := int.le
@@ -46,17 +46,18 @@ theorem le.intro {a b : ℤ} {n : ℕ} (H : a + n = b) : a ≤ b :=
 have n = b - a, from eq_add_neg_of_add_eq (!add.comm ▸ H),
 show nonneg (b - a), from this ▸ unit.star
 
-
 theorem le.elim {a b : ℤ} (H : a ≤ b) : Σn : ℕ, int.add a n = b := --TODO note this is terrible
 obtain (n : ℕ) (H1 : b - a = n), from nonneg.elim H,
 sigma.mk n (!add.comm ▸ add_eq_of_eq_add_neg (H1⁻¹))
 
 theorem le.total (a b : ℤ) : a ≤ b ⊎ b ≤ a :=
-sum_functor (λ x, x)
-  (assume H : nonneg (-(b - a)),
-   have -(b - a) = a - b, from !neg_sub,
-   show nonneg (a - b), from this ▸ H)   -- too bad: can't do it in one step
-  (nonneg_or_nonneg_neg (b - a))
+begin
+cases (nonneg_or_nonneg_neg (b - a)),
+apply sum.inl,
+exact a_1,
+apply sum.inr,
+exact (transport nonneg (neg_sub b a) a_1)
+end
 
 
 theorem of_nat_le_of_nat_of_le {m n : ℕ} (H : #nat m ≤ n) : of_nat m ≤ of_nat n :=
@@ -81,16 +82,19 @@ le.intro (show a + 1 + n = a + succ n, from
 theorem lt.intro {a b : ℤ} {n : ℕ} (H : a + succ n = b) : a < b :=
 H ▸ lt_add_succ a n
 
+set_option pp.all true
+
+--protected definition int_has_one [instance] [reducible] : has_one ℤ := has_one.mk (of_nat (nat.succ nat.zero))
+
 theorem lt.elim {a b : ℤ} (H : a < b) : Σn : ℕ, int.add a (succ n) = b :=
 begin
 cases (le.elim H),
 esimp [succ],
 fapply sigma.mk,
 assumption,
-rewrite [add.comm a_1 (nat.succ nat.zero), (add.assoc a (of_nat (nat.succ nat.zero)) a_1)⁻¹],
+rewrite [add.comm a_1 (of_nat (nat.succ nat.zero)), (add.assoc a (of_nat (nat.succ nat.zero)) a_1)⁻¹],
 assumption
 end
-
 
 
 
@@ -226,7 +230,7 @@ lt.intro
         ... = 0 + nat.succ (nat.succ n * m + n)        : zero_add))
 
 
-theorem zero_lt_one : (0 : ℤ) < 1 := star
+theorem zero_lt_one : (0 : ℤ) < 1 := unit.star
 
 theorem not_le_of_gt {a b : ℤ} (H : a < b) : ¬ b ≤ a :=
   assume Hba,
@@ -236,17 +240,19 @@ theorem not_le_of_gt {a b : ℤ} (H : a < b) : ¬ b ≤ a :=
 theorem lt_of_lt_of_le {a b c : ℤ} (Hab : a < b) (Hbc : b ≤ c) : a < c :=
   let Hab' := le_of_lt Hab in
   let Hac := le.trans Hab' Hbc in
-  (iff.mpr !lt_iff_le_and_ne) (pair Hac
+  (iff.mp' !lt_iff_le_and_ne) (pair Hac
     (assume Heq, not_le_of_gt (Heq ▸ Hab) Hbc))
 
 theorem lt_of_le_of_lt  {a b c : ℤ} (Hab : a ≤ b) (Hbc : b < c) : a < c :=
   let Hbc' := le_of_lt Hbc in
   let Hac := le.trans Hab Hbc' in
-  (iff.mpr !lt_iff_le_and_ne) (pair Hac
+  (iff.mp' !lt_iff_le_and_ne) (pair Hac
     (assume Heq, not_le_of_gt (Heq⁻¹ ▸ Hbc) Hab))
 
 section migrate_algebra
   open [classes] algebra
+
+--print fields linear_ordered_comm_ring
 
   protected definition linear_ordered_comm_ring [reducible] :
     algebra.linear_ordered_comm_ring int :=
@@ -256,18 +262,20 @@ section migrate_algebra
     le_trans         := @le.trans,
     le_antisymm      := @le.antisymm,
     lt               := lt,
-    le_of_lt         := @le_of_lt,
-    lt_irrefl        := lt.irrefl,
-    lt_of_lt_of_le   := @lt_of_lt_of_le,
-    lt_of_le_of_lt   := @lt_of_le_of_lt,
+--    le_of_lt         := @le_of_lt,
+--    lt_irrefl        := lt.irrefl,
+--    lt_of_lt_of_le   := @lt_of_lt_of_le,
+--    lt_of_le_of_lt   := @lt_of_le_of_lt,
     add_le_add_left  := @add_le_add_left,
     mul_nonneg       := @mul_nonneg,
     mul_pos          := @mul_pos,
+    lt_iff_le_and_ne := lt_iff_le_and_ne,
     le_iff_lt_or_eq  := le_iff_lt_or_eq,
     le_total         := le.total,
-    zero_ne_one      := zero_ne_one,
-    zero_lt_one      := zero_lt_one,
-    add_lt_add_left  := @add_lt_add_left⦄
+    zero_ne_one      := zero_ne_one
+--    zero_lt_one      := zero_lt_one,
+--    add_lt_add_left  := @add_lt_add_left
+⦄
 
   protected definition decidable_linear_ordered_comm_ring [reducible] :
     algebra.decidable_linear_ordered_comm_ring int :=
@@ -288,13 +296,13 @@ section migrate_algebra
   show decidable (b ≤ a), from _
   definition decidable_gt [instance] (a b : ℤ) : decidable (a > b) :=
   show decidable (b < a), from _
-  definition min : ℤ → ℤ → ℤ := algebra.min
-  definition max : ℤ → ℤ → ℤ := algebra.max
+--  definition min : ℤ → ℤ → ℤ := algebra.min
+--  definition max : ℤ → ℤ → ℤ := algebra.max
   definition abs : ℤ → ℤ := algebra.abs
   definition sign : ℤ → ℤ := algebra.sign
 
   migrate from algebra with int
-  replacing has_le.ge → ge, has_lt.gt → gt, dvd → dvd, sub → sub, min → min, max → max,
+  replacing has_le.ge → ge, has_lt.gt → gt, dvd → dvd, sub → sub, -- min → min, max → max,
             abs → abs, sign → sign
 
   attribute le.trans ge.trans lt.trans gt.trans [trans]
@@ -303,7 +311,7 @@ end migrate_algebra
 
 /- more facts specific to int -/
 
-theorem of_nat_nonneg (n : ℕ) : 0 ≤ of_nat n := star
+theorem of_nat_nonneg (n : ℕ) : 0 ≤ of_nat n := unit.star
 
 theorem of_nat_pos {n : ℕ} (Hpos : #nat n > 0) : of_nat n > 0 :=
 of_nat_lt_of_nat_of_lt Hpos
@@ -316,7 +324,7 @@ obtain (n : ℕ) (H1 : 0 + of_nat n = a), from le.elim H,
 sigma.mk n (!zero_add ▸ (H1⁻¹))
 
 theorem exists_eq_neg_of_nat {a : ℤ} (H : a ≤ 0) : Σn : ℕ, a = -(of_nat n) :=
-have -a ≥ 0, from iff.mpr !neg_nonneg_iff_nonpos H,
+have -a ≥ 0, from iff.mp' !neg_nonneg_iff_nonpos H,
 obtain (n : ℕ) (Hn : -a = of_nat n), from exists_eq_of_nat this,
 sigma.mk n (eq_neg_of_eq_neg (Hn⁻¹))
 
@@ -325,7 +333,7 @@ obtain (n : ℕ) (Hn : a = of_nat n), from exists_eq_of_nat H,
 Hn⁻¹ ▸ ap of_nat (nat_abs_of_nat n)
 
 theorem of_nat_nat_abs_of_nonpos {a : ℤ} (H : a ≤ 0) : of_nat (nat_abs a) = -a :=
-have -a ≥ 0, from iff.mpr !neg_nonneg_iff_nonpos H,
+have -a ≥ 0, from iff.mp' !neg_nonneg_iff_nonpos H,
 calc
   of_nat (nat_abs a) = of_nat (nat_abs (-a)) : nat_abs_neg
                  ... = -a                    : of_nat_nat_abs_of_nonneg this
@@ -338,18 +346,18 @@ sum.rec_on (le.total 0 b)
 theorem nat_abs_abs (a : ℤ) : nat_abs (abs a) = nat_abs a :=
 abs.by_cases rfl !nat_abs_neg
 
-theorem lt_of_add_one_le {a b : ℤ} (H : a + 1 ≤ b) : a < b :=
-obtain n (H1 : a + 1 + n = b), from le.elim H,
-have a + succ n = b, by rewrite [-H1, add.assoc, add.comm 1],
+theorem lt_of_add_one_le {a b : ℤ} (H : int.add a (of_nat (nat.succ nat.zero)) ≤ b) : a < b :=
+obtain n (H1 : int.add (int.add a (of_nat (nat.succ nat.zero))) n = b), from le.elim H,
+have a + succ n = b, by rewrite [-H1, add.assoc, add.comm (of_nat (nat.succ nat.zero))],
 lt.intro this
 
-theorem add_one_le_of_lt {a b : ℤ} (H : a < b) : a + 1 ≤ b :=
-obtain n (H1 : a + succ n = b), from lt.elim H,
-have a + 1 + n = b, by rewrite [-H1, add.assoc, add.comm 1],
+theorem add_one_le_of_lt {a b : ℤ} (H : a < b) : int.add a (of_nat (nat.succ nat.zero)) ≤ b :=
+obtain n (H1 : int.add a (succ n) = b), from lt.elim H,
+have int.add (int.add a 1) n = b, by rewrite [-H1, add.assoc, add.comm 1],
 le.intro this
 
 theorem lt_add_one_of_le {a b : ℤ} (H : a ≤ b) : a < b + 1 :=
-lt_add_of_le_of_pos H star
+lt_add_of_le_of_pos H unit.star
 
 theorem le_of_lt_add_one {a b : ℤ} (H : a < b + 1) : a ≤ b :=
 have H1 : a + 1 ≤ b + 1, from add_one_le_of_lt H,
@@ -370,13 +378,13 @@ theorem lt_of_le_sub_one {a b : ℤ} (H : a ≤ b - 1) : a < b :=
 theorem sign_of_succ (n : nat) : sign (nat.succ n) = 1 :=
 sign_of_pos (of_nat_pos !nat.succ_pos)
 
-theorem exists_eq_neg_succ_of_nat {a : ℤ} : a < 0 → Σm : ℕ, a = -[1+m] :=
+theorem exists_eq_neg_succ_of_nat {a : ℤ} : a < 0 → Σm : ℕ, a = int.neg_succ_of_nat m :=
 int.cases_on a
   (take m H, absurd (of_nat_nonneg m : 0 ≤ m) (not_le_of_gt H))
   (take m H, sigma.mk m rfl)
 
 theorem eq_one_of_mul_eq_one_right {a b : ℤ} (H : a ≥ 0) (H' : a * b = 1) : a = 1 :=
-have a * b > 0, by rewrite H'; apply star,
+have a * b > 0, by rewrite H'; apply unit.star,
 have b > 0, from pos_of_mul_pos_left this H,
 have a > 0, from pos_of_mul_pos_right `a * b > 0` (le_of_lt `b > 0`),
 sum.rec_on (le_or_gt a 1)
@@ -384,7 +392,7 @@ sum.rec_on (le_or_gt a 1)
     show a = 1, from le.antisymm this (add_one_le_of_lt `a > 0`))
   (suppose a > 1,
     assert a * b ≥ 2 * 1,
-      from mul_le_mul (add_one_le_of_lt `a > 1`) (add_one_le_of_lt `b > 0`) star H,
+      from mul_le_mul (add_one_le_of_lt `a > 1`) (add_one_le_of_lt `b > 0`) unit.star H,
     have empty, by rewrite [H' at this]; exact this,
     empty.elim this)
 
