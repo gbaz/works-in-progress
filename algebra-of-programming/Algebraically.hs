@@ -20,7 +20,12 @@ The following are a set of notes and exercises to introduce the very basic notio
 "An Exploration of the Bird-Meertens Formalism" (Backhouse, 1989)
 "Algebraic Data Types and Program Transformation" (Malcolm, 1990)
 "Upwards and downwards accumulations on trees" (Gibbons, 1992)
+
 -}
+
+{- --- --- --- --- --- ---
+"I practice till the difficult becomes easy; the easy becomes habit; and the habit becomes beautiful."
+--- --- --- --- --- --- -}
 
 --------------------------------------------------------------
 
@@ -37,6 +42,8 @@ data NatF r = ZeroF | SuccF r
 data ListF a r = NilF | ConsF a r
 
 data TreeF a r = LeafF a | BranchF r r
+
+data FixF f = FixF {unRoll :: f (FixF f)}
 
 -- Isomorphism between algebras as sets of things to do in each case, and functions out of a functor that encompasses all cases.
 
@@ -468,10 +475,11 @@ Checking some cases we see that indeed for (op,z) a monoid algebra:
 
 foldr (scanOp op) [] . map (scanr op z) === scanr op z
 
-and hence scanr may be written as a map reduce, and parallelized with time complexity O(log(N))
+and hence scanr may be written as a map reduce, and parallelized.
+
+Note that this is not a very good parallel prefix sum, due to the map. Deriving a genuinely efficient one in this manner, yielding O(log n) complexity, takes a fair amount more work.
 
 See: "Extracting and implementing list homomorphisms in parallel program development" (Gorlatch, 1999).
 
 This includes an application of a generalized method to turn maximum segment sum into a homomorphism as well.
 -}
-
