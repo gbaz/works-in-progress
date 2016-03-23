@@ -1,4 +1,4 @@
-{-# LANGUAGE DataKinds, TypeOperators, MultiParamTypeClasses, TypeFamilies, GADTs, ScopedTypeVariables, RankNTypes, PolyKinds, StandaloneDeriving, FlexibleContexts #-}
+{-# LANGUAGE DataKinds, TypeOperators, MultiParamTypeClasses, TypeFamilies, GADTs, ScopedTypeVariables, RankNTypes, PolyKinds, StandaloneDeriving, FlexibleContexts, UndecidableInstances #-}
 
 module Lambek(
 ) where
@@ -61,6 +61,9 @@ data Term cxt a where
     FooTerm   :: Term (CCons a cxt) b -> Term cxt a -> Term cxt b
 --TODO: Cata representation of terms?
 
+--TODO move everything but lam? (and maybe const?) to the arrows if possibe...
+
+
 appArrow :: CxtArr c d -> Term d a -> Term c a
 appArrow h (ConstTerm g) = ConstTerm $ g C.. h
 appArrow h (LamTerm f)   = LamTerm $ \g x -> f (h C.. g) x
@@ -84,6 +87,10 @@ tm_k = lam $ \x -> LamTerm $ \g y -> appArrow g x
 
 tm_s = lamt $ \h f -> lamt $ \h1 g -> lamt $ \h2 x -> AppTerm (AppTerm (appArrow (h1 C.. h2) f) x) (AppTerm (appArrow h2 g) x)
 
+
+tm_comp :: Term cxt (TExp (TExp a1 b) (TExp (TExp a a1) (TExp a b)))
+tm_comp = lamt $ \h f -> lamt $ \h1 g -> lamt $ \h2 x -> AppTerm (appArrow (h1 C.. h2) f) (AppTerm (appArrow h2 g) x)
+
 --tm_mkpair :: Term cxt (TExp a (TExp a1 (TPair a1 a)))
 tm_mkpair = lamt $ \h x -> lamt $ \g y -> (FooTerm (FooTerm (ConstTerm (CXAProj1 C.. CXACurry))
                                                                 (appArrow CXAProj2 y)) (appArrow g x))
@@ -93,6 +100,35 @@ tm_mkpair = lamt $ \h x -> lamt $ \g y -> (FooTerm (FooTerm (ConstTerm (CXAProj1
 
 weakenTerm :: Term cxt a -> Term (CCons b cxt) a
 weakenTerm = appArrow CXAProj2
+
+interp :: Term CNil a -> CartRepr a
+interp (ConstTerm (CXAAtom i)) = i
+interp (LamTerm f) = undefined --interp Prelude.. blah Prelude.. f CXANil Prelude.. abst
+
+-- Todo we need a placeholder for abst
+
+abst :: CartRepr a -> Term (CCons a CNil) a
+abst = undefined
+
+blah :: Term (CCons a CNil) b -> Term CNil b
+blah = undefined
+
+type family CartRepr (a :: TCart *)
+
+type instance CartRepr (TBase a) = Repr (Ty a)
+type instance CartRepr (TPair a b) = (CartRepr a, CartRepr b)
+type instance CartRepr (TExp a b)  = CartRepr a -> CartRepr b
+type instance CartRepr TUnit = ()
+
+
+          {-
+type family Repr a
+data Ty a
+type instance Repr (Ty AInt) = Int
+type instance Repr (Ty AString) = String
+
+data TCart b = TUnit | TPair (TCart b) (TCart b) | TExp (TCart b) (TCart b) | TBase b
+-}
 
 {-
 ltm f = LTm $ \h x -> f (revArr h x)

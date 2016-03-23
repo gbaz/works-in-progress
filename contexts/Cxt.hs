@@ -159,11 +159,17 @@ tm_polyid = PLam $ \x -> (TmPure 12)
 tm_admissible :: Term CNil (TyArr TyInt TyInt)
 tm_admissible = Lam $ \x -> (abst . (+1) . interp) x
 
+--Can't write this with PLam.
 {-
-Can't write this with PLam.
-tm_not_derivable :: Term CNil (TyArr TyInt TyInt)
-tm_not_derivable = PLam $ \x -> abst . (+1) $ interp (contractCxt x)
+atm_not_derivable :: Term CNil (TyArr TyInt TyInt)
+atm_not_derivable = PLam $ \x -> abst . (+(1::Int)) $ interp (contractCxt x)
 -}
+
+-- gah! does not rule out exotic admissables at all! Just rule out derivables.
+tm_should_not_derivable :: Term CNil (TyArr TyInt TyInt)
+tm_should_not_derivable = PLam $ \x -> case x of (App _ _) -> TmPure 12; _ -> x
+
+
 
 tm_k :: Term CNil (TyArr TyInt (TyArr TyInt TyInt))
 tm_k = Lam $ \x -> Lam $ \_y -> x
@@ -207,3 +213,9 @@ test3 = subst (Weaken (cpure 12 :: Term CNil TyInt)) (TmPlus Var (Weaken Var))
 test4 = interp $ (App tm_fst (App (App tm_cons (TmPure 12)) (TmPure 22)))
 
 test5 = interp tm_eta_fst (23,45)
+
+
+-- category/arrow playground
+
+tmId :: Term (CCons a CNil) a
+tmId = Var
