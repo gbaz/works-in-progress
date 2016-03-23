@@ -2,42 +2,55 @@
 
 module Lambek(
 ) where
+import Prelude hiding ((.))
 import Control.Category as C
 
 {-
 Explorations in lambda terms as elements of presheaves, or generally as slices in a category of contexts.
 -}
 
+data TCart b = TUnit | TPair (TCart b) (TCart b) | TExp (TCart b) (TCart b) | TBase b
+
+type family Repr a :: *
+type family CartRepr a :: *
+
+data Ty a
+
+type instance CartRepr (Ty (TBase a)) = Repr (Ty a)
+type instance CartRepr (Ty (TPair a b)) = (CartRepr (Ty a), CartRepr (Ty b))
+type instance CartRepr (Ty (TExp a b))  = CartRepr (Ty a) -> CartRepr (Ty b)
+type instance CartRepr (Ty TUnit) = ()
+
 data ABase = AInt | AString
 
-type family Repr a
-data Ty a
 type instance Repr (Ty AInt) = Int
 type instance Repr (Ty AString) = String
 
-data TCart b = TUnit | TPair (TCart b) (TCart b) | TExp (TCart b) (TCart b) | TBase b
-
 data Cxt b = CCons (TCart b) (Cxt b) | CNil
 
--- CxtArr a b is a judgment
+-- CxtArr a b is an inference rule
 --   a
 -- -----
 --   b
 
 data CxtArr :: Cxt a -> Cxt a -> * where
   CXAId  :: CxtArr a a
-  CXANil :: CxtArr a CNil
   CXACompose :: CxtArr b c -> CxtArr a b -> CxtArr a c
+  CXANil :: CxtArr a CNil
 
-  CXAAtom :: Repr (Ty b) -> CxtArr cxt (CCons (TBase b) cxt)
+  CXAAtom :: CartRepr (Ty a) -> CxtArr cxt (CCons a cxt)
 
   CXAProj1 :: CxtArr (CCons a cxt) (CCons a CNil)
   CXAProj2 :: CxtArr (CCons a cxt) cxt
 
-  CXACurry :: CxtArr (CCons a (CCons b cxt)) (CCons (TPair a b) cxt)
-  CXAUncurry :: CxtArr (CCons (TPair a b) cxt) (CCons a (CCons b cxt))
+  CXAEval  :: CxtArr (CCons (TExp a b) (CCons a cxt)) (CCons b cxt)
 
--- todo make simplicial? or make product of categories? how to lift morphisms in the base category?
+  CXAAbs   :: CxtArr (CCons b (CCons a cxt)) (CCons (TExp a b) cxt)
+
+--  CXACurry :: CxtArr (CCons a (CCons b cxt)) (CCons (TPair a b) cxt)
+--  CXAUncurry :: CxtArr (CCons (TPair a b) cxt) (CCons a (CCons b cxt))
+
+-- todo make simplicial? or make product of categories?
 
 cxaCompose :: CxtArr b c -> CxtArr a b -> CxtArr a c
 cxaCompose CXAId f = f
@@ -53,24 +66,43 @@ instance Category CxtArr where
 
 data Term cxt a where
     ConstTerm :: CxtArr cxt (CCons a CNil) -> Term cxt a --representable
-    LamTerm   :: (forall c cxt1. CxtArr (CCons c cxt1) cxt -> Term (CCons c cxt1) a -> Term (CCons c cxt1) b) -> Term cxt (TExp a b)
-    -- LTm       :: (forall c. CxtArr c cxt -> Term c a -> Term cxt b) -> Term cxt (TExp a b)
+    LamTerm   :: (forall c. CxtArr c cxt -> Term c a -> Term c b) -> Term cxt (TExp a b)
     AppTerm   :: Term cxt (TExp a b) -> Term cxt a -> Term cxt b
 
-    AbsTerm   :: Term (CCons a cxt) b -> Term cxt (TExp a b)
-    FooTerm   :: Term (CCons a cxt) b -> Term cxt a -> Term cxt b
---TODO: Cata representation of terms?
+--    AbsTerm   :: Term (CCons a cxt) b -> Term cxt (TExp a b)
+--    FooTerm   :: Term (CCons a cxt) b -> Term cxt a -> Term cxt b
 
---TODO move everything but lam? (and maybe const?) to the arrows if possibe...
-
+-- TODO: Cata representation of terms?
+-- Challenge, move AppTerm, AbsTerm, FooTerm to arrows or derived things..
+-- TODO: Add more constants
 
 appArrow :: CxtArr c d -> Term d a -> Term c a
-appArrow h (ConstTerm g) = ConstTerm $ g C.. h
-appArrow h (LamTerm f)   = LamTerm $ \g x -> f (h C.. g) x
+appArrow h (ConstTerm g) = ConstTerm $ g . h
+appArrow h (LamTerm f)   = LamTerm $ \g x -> f (h . g) x
 appArrow h (AppTerm g x) = AppTerm (appArrow h g) (appArrow h x)
 
--- revArr :: CxtArr c d -> Term c a -> Term d a
--- revArr = undefined
+weakenTerm :: Term cxt a -> Term (CCons b cxt) a
+weakenTerm = appArrow CXAProj2
+
+liftTm :: Term CNil a -> Term cxt a
+liftTm = appArrow CXANil
+
+varTm :: Term (CCons a CNil) a
+varTm = ConstTerm CXAId
+
+--TODO can we write subst?
+-- subst :: Term (CCons a cxt) t -> Term cxt a -> Term cxt t
+-- subst = foo...
+
+
+abst :: CartRepr (Ty a) -> Term CNil a
+abst = ConstTerm . CXAAtom
+
+interp :: Term CNil a -> CartRepr (Ty a)
+interp (LamTerm f) = interp . f CXANil . abst
+interp (ConstTerm (CXAAtom x)) = x
+interp (AppTerm f x) = interp f (interp x)
+interp (ConstTerm (CXACompose f g)) =  interp (appArrow g (ConstTerm f))
 
 tmInt :: Int -> Term CNil (TBase AInt)
 tmInt i = ConstTerm (CXAAtom i)
@@ -78,67 +110,43 @@ tmInt i = ConstTerm (CXAAtom i)
 lam :: (forall c. Term c a -> Term c b) -> Term cxt (TExp a b)
 lam f = LamTerm $ \ h -> f
 
-lamt :: (forall c cxt1. CxtArr (CCons c cxt1) cxt -> Term (CCons c cxt1) a -> Term (CCons c cxt1) b) -> Term cxt (TExp a b) --(forall c. CxtArr c cxt -> Term c a -> Term c b) -> Term cxt (TExp a b)
+lamt :: (forall c. CxtArr c cxt -> Term c a -> Term c b) -> Term cxt (TExp a b)
 lamt f = LamTerm f
 
 tm_id = lam $ \x -> x
 
 tm_k = lam $ \x -> LamTerm $ \g y -> appArrow g x
 
-tm_s = lamt $ \h f -> lamt $ \h1 g -> lamt $ \h2 x -> AppTerm (AppTerm (appArrow (h1 C.. h2) f) x) (AppTerm (appArrow h2 g) x)
-
+tm_s = lamt $ \h f -> lamt $ \h1 g -> lamt $ \h2 x -> AppTerm (AppTerm (appArrow (h1 . h2) f) x) (AppTerm (appArrow h2 g) x)
 
 tm_comp :: Term cxt (TExp (TExp a1 b) (TExp (TExp a a1) (TExp a b)))
-tm_comp = lamt $ \h f -> lamt $ \h1 g -> lamt $ \h2 x -> AppTerm (appArrow (h1 C.. h2) f) (AppTerm (appArrow h2 g) x)
+tm_comp = lamt $ \h f -> lamt $ \h1 g -> lamt $ \h2 x -> AppTerm (appArrow (h1 . h2) f) (AppTerm (appArrow h2 g) x)
 
---tm_mkpair :: Term cxt (TExp a (TExp a1 (TPair a1 a)))
-tm_mkpair = lamt $ \h x -> lamt $ \g y -> (FooTerm (FooTerm (ConstTerm (CXAProj1 C.. CXACurry))
-                                                                (appArrow CXAProj2 y)) (appArrow g x))
-
---AbsTerm (AbsTerm (ConstTerm (CXAProj1 C.. CXACurry)))
-            --lamt $ \h x -> lamt $ \g y -> (appArrow _ (ConstTerm (CXAProj1 C.. CXACurry)))
-
-weakenTerm :: Term cxt a -> Term (CCons b cxt) a
-weakenTerm = appArrow CXAProj2
-
-interp :: Term CNil a -> CartRepr a
-interp (ConstTerm (CXAAtom i)) = i
-interp (LamTerm f) = undefined --interp Prelude.. blah Prelude.. f CXANil Prelude.. abst
-
--- Todo we need a placeholder for abst
-
-abst :: CartRepr a -> Term (CCons a CNil) a
-abst = undefined
-
-blah :: Term (CCons a CNil) b -> Term CNil b
-blah = undefined
-
-type family CartRepr (a :: TCart *)
-
-type instance CartRepr (TBase a) = Repr (Ty a)
-type instance CartRepr (TPair a b) = (CartRepr a, CartRepr b)
-type instance CartRepr (TExp a b)  = CartRepr a -> CartRepr b
-type instance CartRepr TUnit = ()
-
-
-          {-
-type family Repr a
-data Ty a
-type instance Repr (Ty AInt) = Int
-type instance Repr (Ty AString) = String
-
-data TCart b = TUnit | TPair (TCart b) (TCart b) | TExp (TCart b) (TCart b) | TBase b
--}
 
 {-
-ltm f = LTm $ \h x -> f (revArr h x)
-
-tm_id1 = LTm $ \h x -> revArr h x
-
-tm_k1 = LTm $ \h x -> LTm $ \g y -> revArr h x
-
-tm_s1 = LTm $ \h f -> LTm $ \h1 g -> LTm $ \h2 x -> AppTerm (AppTerm (revArr h f) (revArr h2 x)) (AppTerm (revArr h1 g) (revArr h2 x))
+tm_mkpair :: Term cxt (TExp a (TExp b (TPair b a)))
+tm_mkpair = lamt $ \h x -> lamt $ \g y -> (FooTerm (FooTerm (ConstTerm (CXAProj1 . CXACurry))
+                                                                (appArrow CXAProj2 y)) (appArrow g x))
 -}
+
+
+{-
+
+interpGen :: (forall c. CxtArr c cxt) -> Term cxt a -> CartRepr (Ty a)
+interpGen h (LamTerm f) = interpGen h . f h . liftTm . abst
+
+
+appTm :: Term cxt (TExp a b) -> Term cxt a -> Term cxt b
+appTm (LamTerm f) = (f CXAId)
+appTm (ConstTerm (CXAAtom f)) = abst . f . interp
+
+appTmNil :: Term CNil (TExp a b) -> Term CNil a -> Term CNil b
+appTmNil f = ConstTerm . CXAAtom . interp f . interp
+
+-}
+
+-- foo = lamt $ \h x -> appArrow CXAEval x
+
 {-
 tm_badcata
 
@@ -150,8 +158,6 @@ tm_s = lam $ \f -> lam $ \g -> lam $ \x -> AppTerm (AppTerm f x) (AppTerm g x)
 tmBadCase :: Term cxt (TExp (TBase AInt) (TBase AInt))
 tmBadCase = LamTerm $ \ x -> case x of (ConstTerm _) -> tmInt 24; _ -> x
 -}
-     --        PLam   :: (forall c. Term (CCons c cxt) a -> Term (CCons c cxt) b) -> Term cxt (TyArr a b)
-
 {-
 
 type family ToCxt a :: Cxt b where
@@ -203,7 +209,7 @@ data Op c a b = Op (c b a)
 
 instance Category c => Category (Op c) where
     id = C.id
-    (Op g) . (Op f) = Op (f C.. g)
+    (Op g) . (Op f) = Op (f . g)
 
 type CArr = Op CxtArr
 

@@ -11,12 +11,11 @@ open eq sigma sigma.ops equiv is_equiv equiv.ops eq.ops int algebra set_quotient
 record prerat : Type :=
 (num : ℤ) (denom : ℤ) (denom_pos : denom > 0)
 
-
 namespace prerat
 
 definition equiv (a b : prerat) : Type.{0} :=
-  int.mul (prerat.num a) (prerat.denom b) =
-  int.mul (prerat.num b) (prerat.denom a)
+  (prerat.num a) * (prerat.denom b) =
+  (prerat.num b)  *(prerat.denom a)
 
 infix `≡` := equiv
 

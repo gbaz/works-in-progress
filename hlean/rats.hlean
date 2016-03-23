@@ -1,7 +1,7 @@
 import types.int algebra.field hit.set_quotient hit.trunc int_order
 open eq sigma sigma.ops equiv is_equiv equiv.ops eq.ops int algebra set_quotient is_trunc trunc quotient
 
-record prerat : Type := (num : ℤ) (denom : ℤ) (dp : denom > 0)
+record prerat : Type := (num : ℤ) (denom : ℤ) --(dp : denom > 0)
 
 inductive rat_rel : prerat → prerat → Type :=
  | Rmk : Π (a b : prerat), int.mul (prerat.num a) (prerat.denom b) =
@@ -24,7 +24,6 @@ prerat.mk (num a * num b) (denom a * denom b)
 
 definition neg (a : prerat) : prerat :=
 prerat.mk (- num a) (denom a)
-
 
 definition rat_rel_refl (a : ℤ) (b : ℤ) : rat_rel (mk a b) (mk a b) :=
 rat_rel.Rmk (prerat.mk a b) (prerat.mk a b) (refl _)
