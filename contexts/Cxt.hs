@@ -40,6 +40,18 @@ data Term cxt a where
 -- primitives
    TmPlus :: Term cxt TyInt -> Term cxt TyInt -> Term cxt TyInt
 
+db2hoas :: Term cxt a -> Term cxt a
+db2hoas (Abs body) = Lam $ \x -> subst x body
+--TODO etc
+
+hoas2db :: Term cxt a -> Term cxt a
+hoas2db (Lam f) = Abs (foo f Var)
+
+foo :: (Term cxt a1 -> Term cxt b)
+    -> Term (CCons a1 cxt) a1 -> Term (CCons a1 cxt) b
+foo f x = Weaken $ _ f x -- need to lift all vars in f.
+
+
 -- closed terms form a (restricted) monad
 cpure :: Repr a -> Term CNil a
 cpure = TmPure
