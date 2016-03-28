@@ -33,6 +33,8 @@ data Cxt b = CCons (TCart b) (Cxt b) | CNil
 -- -----
 --   b
 
+-- todo make simplicial? or make product of categories?
+
 data CxtArr :: Cxt a -> Cxt a -> * where
   CXAId  :: CxtArr a a
   CXACompose :: CxtArr b c -> CxtArr a b -> CxtArr a c
@@ -43,14 +45,27 @@ data CxtArr :: Cxt a -> Cxt a -> * where
   CXAProj1 :: CxtArr (CCons a cxt) (CCons a CNil)
   CXAProj2 :: CxtArr (CCons a cxt) cxt
 
-  CXAEval  :: CxtArr (CCons (TExp a b) (CCons a cxt)) (CCons b cxt)
+  CXAPair  :: CxtArr cxt (CCons a CNil) -> CxtArr cxt (CCons b CNil) -> CxtArr cxt (CCons (TPair a b) CNil)
+  CXAPairProj1 :: CxtArr cxt (CCons (TPair a b) CNil) -> CxtArr cxt (CCons a CNil)
+  CXAPairProj2 :: CxtArr cxt (CCons (TPair a b) CNil) -> CxtArr cxt (CCons b CNil)
 
-  CXAAbs   :: CxtArr (CCons b (CCons a cxt)) (CCons (TExp a b) cxt)
+  CXAEval  :: CxtArr (CCons (TPair (TExp a b) a) cxt) (CCons b cxt)
+
+--  CXAAbs   :: CxtArr (CCons b (CCons a cxt)) (CCons (TExp a b) cxt)
 
 --  CXACurry :: CxtArr (CCons a (CCons b cxt)) (CCons (TPair a b) cxt)
 --  CXAUncurry :: CxtArr (CCons (TPair a b) cxt) (CCons a (CCons b cxt))
 
--- todo make simplicial? or make product of categories?
+unTerm :: Term cxt a -> CxtArr cxt (CCons a CNil)
+unTerm (ConstTerm x) = x
+unTerm (AppTerm f x) = CXAEval . (CXAPair (unTerm f) (unTerm x))
+unTerm (LamTerm f) = unTerm $ abstTerm (f CXAProj2 (appArrow CXAProj1 $ ConstTerm CXAId))
+
+abstTerm :: Term (CCons a cxt) b -> Term cxt (TExp a b)
+abstTerm = undefined
+
+-- tm_mkpair = lamt $ \h x -> lamt $ \g y -> ConstTerm (CXAPair (_ x) (_ y))
+-- TODO: Add more constants?
 
 cxaCompose :: CxtArr b c -> CxtArr a b -> CxtArr a c
 cxaCompose CXAId f = f
@@ -58,6 +73,7 @@ cxaCompose f CXAId = f
 cxaCompose (CXACompose h g) f = cxaCompose h (cxaCompose g f)
 cxaCompose g f = CXACompose g f
 
+-- todo make instance of classes in categories lib?
 instance Category CxtArr where
     id = CXAId
     (.) = cxaCompose
@@ -74,7 +90,6 @@ data Term cxt a where
 
 -- TODO: Cata representation of terms?
 -- Challenge, move AppTerm, AbsTerm, FooTerm to arrows or derived things..
--- TODO: Add more constants
 
 appArrow :: CxtArr c d -> Term d a -> Term c a
 appArrow h (ConstTerm g) = ConstTerm $ g . h
