@@ -94,6 +94,8 @@ varTm = ConstTerm CXAId
 -- subst :: Term (CCons a cxt) t -> Term cxt a -> Term cxt t
 -- subst = foo...
 
+-- note that lifting functions puts them in a CNil context on both sides, which ain't useful :-)
+
 
 abst :: CartRepr (Ty a) -> Term CNil a
 abst = ConstTerm . CXAAtom
