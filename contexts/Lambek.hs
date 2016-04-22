@@ -35,27 +35,111 @@ data Cxt b = CCons (TCart b) (Cxt b) | CNil
 
 -- todo make simplicial? or make product of categories?
 
-data CxtArr :: Cxt a -> Cxt a -> * where
+data CxtArr :: Cxt a -> Cxt a -> *  where
   CXAId  :: CxtArr a a
   CXACompose :: CxtArr b c -> CxtArr a b -> CxtArr a c
   CXANil :: CxtArr a CNil
 
   CXAAtom :: CartRepr (Ty a) -> CxtArr cxt (CCons a cxt)
 
-  CXAProj1 :: CxtArr (CCons a cxt) (CCons a CNil)
-  CXAProj2 :: CxtArr (CCons a cxt) cxt
-
-  CXAPair  :: CxtArr cxt (CCons a CNil) -> CxtArr cxt (CCons b CNil) -> CxtArr cxt (CCons (TPair a b) CNil)
-  CXAPairProj1 :: CxtArr cxt (CCons (TPair a b) CNil) -> CxtArr cxt (CCons a CNil)
-  CXAPairProj2 :: CxtArr cxt (CCons (TPair a b) CNil) -> CxtArr cxt (CCons b CNil)
+  CXAWeaken :: CxtArr (CCons a cxt) cxt
 
   CXAEval  :: CxtArr (CCons (TPair (TExp a b) a) cxt) (CCons b cxt)
 
---  CXAAbs   :: CxtArr (CCons b (CCons a cxt)) (CCons (TExp a b) cxt)
+  CXAAbs   :: CxtArr (CCons a cxt) (CCons b CNil) ->  CxtArr cxt (CCons (TExp a b) CNil)
+  CXALam    :: (forall c. CxtArr c cxt -> CxtArr c (CCons a c2) -> CxtArr c (CCons b c2)) -> CxtArr cxt (CCons (TExp a b) c2)
 
---  CXACurry :: CxtArr (CCons a (CCons b cxt)) (CCons (TPair a b) cxt)
---  CXAUncurry :: CxtArr (CCons (TPair a b) cxt) (CCons a (CCons b cxt))
+  -- we don't really need these?
+  CXAPair  :: CxtArr cxt (CCons a c2) -> CxtArr cxt (CCons b c2) -> CxtArr cxt (CCons (TPair a b) c2)
+  CXAPairProj1 :: CxtArr (CCons (TPair a b) cxt) (CCons a cxt)
+  CXAPairProj2 :: CxtArr (CCons (TPair a b) cxt) (CCons b cxt)
 
+
+-- As per section 10 of  http://arxiv.org/pdf/math/9911073.pdf
+
+cxaCompose :: CxtArr b c -> CxtArr a b -> CxtArr a c
+cxaCompose CXAId f = f
+cxaCompose f CXAId = f
+cxaCompose h (CXACompose g f) = CXACompose (cxaCompose h g) f
+cxaCompose CXAEval (CXAPair (CXACompose (CXAAbs f) CXAWeaken) CXAId) = f
+cxaCompose CXAEval (CXAPair (CXACompose (CXALam f) CXAWeaken) CXAId) = f CXAWeaken CXAId
+cxaCompose CXAPairProj1 (CXAPair a b) = a
+cxaCompose CXAPairProj2 (CXAPair a b) = b
+
+--TODO fix all the rules in composition... maybe move abs to deal with pairs somehow?
+cxaCompose g f = CXACompose g f
+
+-- TODO write cxaPair as a "smart constructor"
+
+-- todo make instance of classes in categories lib?
+instance Category CxtArr where
+    id = CXAId
+    (.) = cxaCompose
+
+-- terms here are elements or fibers of presheaves.
+newtype Term cxt a = Term (CxtArr cxt (CCons a CNil))
+
+unTerm :: Term cxt a -> CxtArr cxt (CCons a CNil)
+unTerm (Term x) = x
+
+lamTerm :: (forall c. CxtArr c cxt -> Term c a -> Term c b) -> Term cxt (TExp a b)
+lamTerm f = Term (CXALam (\m x -> unTerm (f m (Term x))))
+
+appTerm :: Term cxt (TExp a b) -> Term cxt a -> Term cxt b
+appTerm f x = Term (CXAEval . (CXAPair (unTerm f) (unTerm x)))
+
+appArrow :: CxtArr c d -> Term d a -> Term c a
+appArrow h (Term g) = Term $ g . h
+
+interp :: Term CNil a -> CartRepr (Ty a)
+interp (Term (CXAAtom x)) = x
+interp (Term (CXACompose f g)) =  interp (appArrow g (Term f))
+interp (Term (CXALam f)) = interp . Term . f CXAId . CXAAtom
+interp (Term (CXAAbs f)) = interp (Term (CXALam $ \_ x -> f . x))
+interp (Term (CXAPair f g)) = (interp (Term f), interp (Term g))
+
+weakenTerm :: Term cxt a -> Term (CCons b cxt) a
+weakenTerm = appArrow CXAWeaken
+
+liftTm :: Term CNil a -> Term cxt a
+liftTm = appArrow CXANil
+
+varTm :: Term (CCons a CNil) a
+varTm = Term CXAId
+
+--TODO can we write subst?
+-- subst :: Term (CCons a cxt) t -> Term cxt a -> Term cxt t
+-- subst = foo...
+
+test = (interp (tm_id :: Term cxt (TExp (TBase AInt) (TBase AInt)))) $ 12
+
+abst :: CartRepr (Ty a) -> Term CNil a
+abst = Term . CXAAtom
+
+
+tmInt :: Int -> Term CNil (TBase AInt)
+tmInt i = Term (CXAAtom i)
+
+lam :: (forall c. Term c a -> Term c b) -> Term cxt (TExp a b)
+lam f = lamTerm $ \ h -> f
+
+lamt :: (forall c. CxtArr c cxt -> Term c a -> Term c b) -> Term cxt (TExp a b)
+lamt f = lamTerm f
+
+tm_id = lam $ \x -> x
+
+tm_id2 = Term (CXAAbs CXAId)
+
+tm_k = lam $ \x -> lamTerm $ \g y -> appArrow g x
+
+tm_s = lamt $ \h f -> lamt $ \h1 g -> lamt $ \h2 x -> appTerm (appTerm (appArrow (h1 . h2) f) x) (appTerm (appArrow h2 g) x)
+
+tm_comp :: Term cxt (TExp (TExp a1 b) (TExp (TExp a a1) (TExp a b)))
+tm_comp = lamt $ \h f -> lamt $ \h1 g -> lamt $ \h2 x -> appTerm (appArrow (h1 . h2) f) (appTerm (appArrow h2 g) x)
+
+
+
+{-
 unTerm :: Term cxt a -> CxtArr cxt (CCons a CNil)
 unTerm (ConstTerm x) = x
 unTerm (AppTerm f x) = CXAEval . (CXAPair (unTerm f) (unTerm x))
@@ -63,80 +147,7 @@ unTerm (LamTerm f) = unTerm $ abstTerm (f CXAProj2 (appArrow CXAProj1 $ ConstTer
 
 abstTerm :: Term (CCons a cxt) b -> Term cxt (TExp a b)
 abstTerm = undefined
-
--- tm_mkpair = lamt $ \h x -> lamt $ \g y -> ConstTerm (CXAPair (_ x) (_ y))
--- TODO: Add more constants?
-
-cxaCompose :: CxtArr b c -> CxtArr a b -> CxtArr a c
-cxaCompose CXAId f = f
-cxaCompose f CXAId = f
-cxaCompose (CXACompose h g) f = cxaCompose h (cxaCompose g f)
-cxaCompose g f = CXACompose g f
-
--- todo make instance of classes in categories lib?
-instance Category CxtArr where
-    id = CXAId
-    (.) = cxaCompose
-
--- terms here are elements or fibers of presheaves. We want the whole thing? Ans -- in all contexts?
-
-data Term cxt a where
-    ConstTerm :: CxtArr cxt (CCons a CNil) -> Term cxt a --representable
-    LamTerm   :: (forall c. CxtArr c cxt -> Term c a -> Term c b) -> Term cxt (TExp a b)
-    AppTerm   :: Term cxt (TExp a b) -> Term cxt a -> Term cxt b
-
---    AbsTerm   :: Term (CCons a cxt) b -> Term cxt (TExp a b)
---    FooTerm   :: Term (CCons a cxt) b -> Term cxt a -> Term cxt b
-
--- TODO: Cata representation of terms?
--- Challenge, move AppTerm, AbsTerm, FooTerm to arrows or derived things..
-
-appArrow :: CxtArr c d -> Term d a -> Term c a
-appArrow h (ConstTerm g) = ConstTerm $ g . h
-appArrow h (LamTerm f)   = LamTerm $ \g x -> f (h . g) x
-appArrow h (AppTerm g x) = AppTerm (appArrow h g) (appArrow h x)
-
-weakenTerm :: Term cxt a -> Term (CCons b cxt) a
-weakenTerm = appArrow CXAProj2
-
-liftTm :: Term CNil a -> Term cxt a
-liftTm = appArrow CXANil
-
-varTm :: Term (CCons a CNil) a
-varTm = ConstTerm CXAId
-
---TODO can we write subst?
--- subst :: Term (CCons a cxt) t -> Term cxt a -> Term cxt t
--- subst = foo...
-
-
-abst :: CartRepr (Ty a) -> Term CNil a
-abst = ConstTerm . CXAAtom
-
-interp :: Term CNil a -> CartRepr (Ty a)
-interp (LamTerm f) = interp . f CXANil . abst
-interp (ConstTerm (CXAAtom x)) = x
-interp (AppTerm f x) = interp f (interp x)
-interp (ConstTerm (CXACompose f g)) =  interp (appArrow g (ConstTerm f))
-
-tmInt :: Int -> Term CNil (TBase AInt)
-tmInt i = ConstTerm (CXAAtom i)
-
-lam :: (forall c. Term c a -> Term c b) -> Term cxt (TExp a b)
-lam f = LamTerm $ \ h -> f
-
-lamt :: (forall c. CxtArr c cxt -> Term c a -> Term c b) -> Term cxt (TExp a b)
-lamt f = LamTerm f
-
-tm_id = lam $ \x -> x
-
-tm_k = lam $ \x -> LamTerm $ \g y -> appArrow g x
-
-tm_s = lamt $ \h f -> lamt $ \h1 g -> lamt $ \h2 x -> AppTerm (AppTerm (appArrow (h1 . h2) f) x) (AppTerm (appArrow h2 g) x)
-
-tm_comp :: Term cxt (TExp (TExp a1 b) (TExp (TExp a a1) (TExp a b)))
-tm_comp = lamt $ \h f -> lamt $ \h1 g -> lamt $ \h2 x -> AppTerm (appArrow (h1 . h2) f) (AppTerm (appArrow h2 g) x)
-
+-}
 
 {-
 tm_mkpair :: Term cxt (TExp a (TExp b (TPair b a)))
