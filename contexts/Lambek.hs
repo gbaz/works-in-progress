@@ -5,6 +5,10 @@ module Lambek(
 import Prelude hiding ((.))
 import Control.Category as C
 
+import Debug.Trace
+import System.IO.Unsafe
+import Control.Concurrent
+
 {-
 Explorations in lambda terms as elements of presheaves, or generally as slices in a category of contexts.
 -}
@@ -21,17 +25,20 @@ type instance CartRepr (Ty (TPair a b)) = (CartRepr (Ty a), CartRepr (Ty b))
 type instance CartRepr (Ty (TExp a b))  = CartRepr (Ty a) -> CartRepr (Ty b)
 type instance CartRepr (Ty TUnit) = ()
 
-data ABase = AInt | AString
+data ABase = AInt | AString | ADouble
 
 type instance Repr (Ty AInt) = Int
 type instance Repr (Ty AString) = String
+type instance Repr (Ty ADouble) = Double
 
 data Cxt b = CCons (TCart b) (Cxt b) | CNil
 
--- CxtArr a b is an inference rule
---   a
--- -----
---   b
+-- CxtArr a b is a judgment a |- b
+-- CxtArr a b -> CxtArr c d is an inference rule
+--   a |- b
+-- ---------
+--   c |- d
+-- Cube?
 
 -- todo make simplicial? or make product of categories?
 
@@ -55,6 +62,19 @@ data CxtArr :: Cxt a -> Cxt a -> *  where
   CXAPairProj2 :: CxtArr (CCons (TPair a b) cxt) (CCons b cxt)
 
 
+instance Show (CxtArr a b) where
+    show CXAId = "CXAId"
+    show (CXACompose g f) = show g ++ " . " ++ show f
+    show CXANil = "CXANil"
+    show (CXAAtom x) = "CXAAtom"
+    show CXAWeaken = "CXAWeaken"
+    show CXAEval = "CXAEval"
+    show (CXAAbs f) = "CXAAbs (" ++ show f ++ ")"
+    show (CXALam f) = "CXALam" -- ++ (show (f CXAWeaken CXAId)) ?
+    show (CXAPair f g) = "(" ++ show f ++ ", " ++ show g ++ ")"
+    show CXAPairProj1 = "CXAPairProj1"
+    show CXAPairProj2 = "CXAPairProj2"
+
 -- As per section 10 of  http://arxiv.org/pdf/math/9911073.pdf
 
 cxaCompose :: CxtArr b c -> CxtArr a b -> CxtArr a c
@@ -62,7 +82,8 @@ cxaCompose CXAId f = f
 cxaCompose f CXAId = f
 cxaCompose h (CXACompose g f) = CXACompose (cxaCompose h g) f
 cxaCompose CXAEval (CXAPair (CXACompose (CXAAbs f) CXAWeaken) CXAId) = f
-cxaCompose CXAEval (CXAPair (CXACompose (CXALam f) CXAWeaken) CXAId) = f CXAWeaken CXAId
+--cxaCompose CXAEval (CXAPair (CXACompose (CXALam f) CXAWeaken) CXAId) = f CXAWeaken CXAId
+cxaCompose CXAEval (CXAPair (CXALam f) g) = f CXAId g
 cxaCompose CXAPairProj1 (CXAPair a b) = a
 cxaCompose CXAPairProj2 (CXAPair a b) = b
 
@@ -77,7 +98,7 @@ instance Category CxtArr where
     (.) = cxaCompose
 
 -- terms here are elements or fibers of presheaves.
-newtype Term cxt a = Term (CxtArr cxt (CCons a CNil))
+newtype Term cxt a = Term (CxtArr cxt (CCons a CNil)) deriving Show
 
 unTerm :: Term cxt a -> CxtArr cxt (CCons a CNil)
 unTerm (Term x) = x
@@ -91,12 +112,15 @@ appTerm f x = Term (CXAEval . (CXAPair (unTerm f) (unTerm x)))
 appArrow :: CxtArr c d -> Term d a -> Term c a
 appArrow h (Term g) = Term $ g . h
 
+interp' :: Term CNil a -> CartRepr (Ty a)
+interp' (Term (CXAAtom x)) = x
+interp' (Term (CXACompose f g)) =  interp (appArrow g (Term f)) -- can we just make composition?
+interp' (Term (CXALam f)) = interp . Term . f CXAId . CXAAtom
+interp' (Term (CXAAbs f)) = interp (Term (CXALam $ \_ x -> f . x))
+interp' (Term (CXAPair f g)) = (interp (Term f), interp (Term g))
+
 interp :: Term CNil a -> CartRepr (Ty a)
-interp (Term (CXAAtom x)) = x
-interp (Term (CXACompose f g)) =  interp (appArrow g (Term f))
-interp (Term (CXALam f)) = interp . Term . f CXAId . CXAAtom
-interp (Term (CXAAbs f)) = interp (Term (CXALam $ \_ x -> f . x))
-interp (Term (CXAPair f g)) = (interp (Term f), interp (Term g))
+interp x = unsafePerformIO (threadDelay 100000) `seq` traceShow x (interp' x)
 
 weakenTerm :: Term cxt a -> Term (CCons b cxt) a
 weakenTerm = appArrow CXAWeaken
@@ -111,11 +135,8 @@ varTm = Term CXAId
 -- subst :: Term (CCons a cxt) t -> Term cxt a -> Term cxt t
 -- subst = foo...
 
-test = (interp (tm_id :: Term cxt (TExp (TBase AInt) (TBase AInt)))) $ 12
-
 abst :: CartRepr (Ty a) -> Term CNil a
 abst = Term . CXAAtom
-
 
 tmInt :: Int -> Term CNil (TBase AInt)
 tmInt i = Term (CXAAtom i)
@@ -134,8 +155,20 @@ tm_k = lam $ \x -> lamTerm $ \g y -> appArrow g x
 
 tm_s = lamt $ \h f -> lamt $ \h1 g -> lamt $ \h2 x -> appTerm (appTerm (appArrow (h1 . h2) f) x) (appTerm (appArrow h2 g) x)
 
+
 tm_comp :: Term cxt (TExp (TExp a1 b) (TExp (TExp a a1) (TExp a b)))
 tm_comp = lamt $ \h f -> lamt $ \h1 g -> lamt $ \h2 x -> appTerm (appArrow (h1 . h2) f) (appTerm (appArrow h2 g) x)
+
+tm_f :: Term CNil (TExp (TExp a b) (TExp a a))
+tm_f = appTerm tm_s tm_k
+
+
+-- this works
+test = (interp (tm_id :: Term cxt (TExp (TBase AInt) (TBase AInt)))) $ 12
+
+itm_f :: (Double -> String) -> (Double -> Double)
+itm_f = interp (tm_f :: Term CNil (TExp (TExp (TBase ADouble) (TBase AString)) (TExp (TBase ADouble) (TBase ADouble))))
+
 
 
 
