@@ -180,7 +180,7 @@ nbe :: Term CNil a -> Term CNil a
 nbe = abst . interp
 
 subst :: Term (CCons a cxt) t -> Term cxt a -> Term cxt t
-subst f = appTerm (absTerm f)
+subst = appTerm . absTerm
 
 -- Substitution gives a module over a relative monad
 runit :: Term cxt a -> Term (CCons b cxt) a
