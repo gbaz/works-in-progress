@@ -97,6 +97,7 @@ instance Show (CxtArr a b) where
 cxaCompose :: CxtArr b c -> CxtArr a b -> CxtArr a c
 cxaCompose CXAId f = f
 cxaCompose f CXAId = f
+cxaCompose CXANil _ = CXANil
 cxaCompose CXAEval (CXAPair (CXALam f) g) = f CXAId g
 cxaCompose CXAPairProj1 (CXAPair a b) = a
 cxaCompose CXAPairProj2 (CXAPair a b) = b
@@ -134,8 +135,13 @@ lamTerm f = Term (CXALam (\m x -> unTerm (f m (Term x))))
 appTerm :: Term cxt (TExp a b) -> Term cxt a -> Term cxt b
 appTerm f x = Term (CXAEval . (CXAPair (unTerm f) (unTerm x)))
 
+-- in the slice, weaken gives the inverse image along a face
 weakenTerm :: Term cxt a -> Term (CCons b cxt) a
 weakenTerm = Term . (. CXAWeaken) . unTerm
+
+-- and abs gives a form of inverse image along a degeneracy?
+absTerm :: Term (CCons a cxt) b -> Term cxt (TExp a b)
+absTerm = Term . CXAAbs . unTerm
 
 liftTm :: Term CNil a -> Term cxt a
 liftTm = Term . (. CXANil) . unTerm
@@ -173,11 +179,22 @@ interp x = unsafePerformIO (threadDelay 100000) `seq` traceShow x (interp' x)
 nbe :: Term CNil a -> Term CNil a
 nbe = abst . interp
 
--- To be done -- formulate terms as a module over a (relative) monad.
--- To be done -- write substitution on terms directly.
---               subst :: Term (CCons a cxt) t -> Term cxt a -> Term cxt t
+subst :: Term (CCons a cxt) t -> Term cxt a -> Term cxt t
+subst f g = Term $ CXAEval . CXAPair (CXAAbs (unTerm f)) (unTerm g)
+
+-- Substitution gives a module over a relative monad
+runit :: Term cxt a -> Term (CCons b cxt) a
+runit = weakenTerm
+
+rmap :: Term cxt (TExp a b) -> Term cxt a -> Term cxt b
+rmap = appTerm
+
+-- need contraction
+-- rjoin :: Term (CCons b (CCons b cxt)) a -> Term (CCons b cxt) a
+-- rjoin f = _
 
 -- To be done, explore if LamTerm gives proper derivability vs. admissibility rule
+-- Todo -- see if we want to distinguish the simplicial structure of contexts from the value stucture?
 
 
 -- Some examples
