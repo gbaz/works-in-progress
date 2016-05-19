@@ -45,6 +45,8 @@ data Cxt b = CCons (TCart b) (Cxt b) | CNil
 -- These morphisms can also be read in logical terms:
 --
 -- CxtArr a b is a judgment a |- b
+-- when b contains multiple terms this is a sequent
+--
 -- CxtArr a b -> CxtArr c d is an inference rule
 --   a |- b
 -- ---------
@@ -112,7 +114,8 @@ instance Category CxtArr where
     id = CXAId
     (.) = cxaCompose
 
--- Terms here are elements or fibers of presheaves. Alternately, terms of type A are elements of the slice category over the context containing only A
+-- Terms here are elements or fibers of presheaves. Alternately, terms of type A are elements of the slice category over the context containing only A.
+-- That is, a term is a sequent judgment which corresponds to a natural judgement (has only one consequent).
 data Term cxt a where
     Term :: CxtArr cxt (CCons a CNil) -> Term cxt a
 -- An experiment in progress
@@ -189,7 +192,7 @@ runit = weakenTerm
 rmap :: Term cxt (TExp a b) -> Term cxt a -> Term cxt b
 rmap = appTerm
 
--- need contraction
+-- need contraction / diagonal
 -- rjoin :: Term (CCons b (CCons b cxt)) a -> Term (CCons b cxt) a
 -- rjoin f = _
 
@@ -227,4 +230,6 @@ test = (interp (tm_id :: Term cxt (TExp (TBase AInt) (TBase AInt)))) $ 12
 test2 = (interp (tm_id2 :: Term CNil (TExp (TBase AInt) (TBase AInt)))) $ 12
 
 itm_f :: (Double -> String) -> (Double -> Double)
-itm_f = interp (tm_f :: Term CNil (TExp (TExp (TBase ADouble) (TBase AString)) (TExp (TBase ADouble) (TBase ADouble))))
+itm_f = interp (tm_f :: Term CNil (TExp (TExp (TBase ADouble) (TBase AString)) (TExp (TBase ADouble) (TBase ADouble)))) -- necessary because we don't have injective type families
+
+-- The above structure can perhaps be treated perhaps as a Category with Attributes where we don't have "real" contexts, but instead can "push" all our contexts [a,b,c] |- d into Nil |- (a,b,c) -> d, as the types don't depend on elements of the context. Introduction of genuine Pi types should screw this possibility up in interesting ways.
