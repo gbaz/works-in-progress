@@ -65,7 +65,10 @@ data CxtArr :: Cxt a -> Cxt a -> *  where
   -- We have face maps
   CXAWeaken :: CxtArr (CCons a cxt) cxt
 
-  -- We have degeneracy maps given by every inhabitant of our underlying terms
+  -- We have degeneracy maps
+  CXADiag :: CxtArr (CCons a cxt) (CCons a (CCons a cxt))
+
+  -- We have additional "degeneracy" maps given by every inhabitant of our underlying terms
   CXAAtom :: CartRepr (Ty a) -> CxtArr cxt (CCons a cxt)
 
   -- We also have a cartesian structure
@@ -80,6 +83,8 @@ data CxtArr :: Cxt a -> Cxt a -> *  where
   -- We also add directly the internal hom in a slice category, which _also_ should give a closed structure.
   CXALam   :: (forall c. CxtArr c cxt -> CxtArr c (CCons a c2) -> CxtArr c (CCons b c2)) -> CxtArr cxt (CCons (TExp a b) c2)
 
+  -- Todo, some functoriality of contextual operations? i.e. context morphisms should be stable under extension.
+
 -- A Hacky Show Instance
 instance Show (CxtArr a b) where
     show CXAId = "CXAId"
@@ -93,6 +98,7 @@ instance Show (CxtArr a b) where
     show (CXAPair f g) = "(" ++ show f ++ ", " ++ show g ++ ")"
     show CXAPairProj1 = "CXAPairProj1"
     show CXAPairProj2 = "CXAPairProj2"
+    show CXADiag = "CXADiag"
 
 -- We give axioms on our category as conditions on coherence of composition
 -- As per section 10 of  http://arxiv.org/pdf/math/9911073.pdf
@@ -104,10 +110,14 @@ cxaCompose CXAEval (CXAPair (CXALam f) g) = f CXAId g
 cxaCompose CXAPairProj1 (CXAPair a b) = a
 cxaCompose CXAPairProj2 (CXAPair a b) = b
 
--- If the axioms are right, we should never need CXACompose directly, i.e. never get stuck.
--- cxaCompose h (CXACompose g f) = CXACompose (cxaCompose h g) f
--- cxaCompose CXAEval (CXAPair (CXACompose (CXAAbs f) CXAWeaken) CXAId) = f
--- cxaCompose g f = CXACompose g f
+-- TODO: further rules for weaken or diag, in interaction with eval in particular?
+cxaCompose CXAWeaken CXADiag = CXAId
+
+cxaCompose h (CXACompose g f) = CXACompose (cxaCompose h g) f
+
+-- with this we can get stuck. ideally we'll never hit it.
+cxaCompose f g = CXACompose f g
+
 
 -- CxtArr indeed gives a category
 instance Category CxtArr where
@@ -146,11 +156,14 @@ weakenTerm = Term . (. CXAWeaken) . unTerm
 absTerm :: Term (CCons a cxt) b -> Term cxt (TExp a b)
 absTerm = Term . CXAAbs . unTerm
 
-liftTm :: Term CNil a -> Term cxt a
-liftTm = Term . (. CXANil) . unTerm
+liftTerm :: Term CNil a -> Term cxt a
+liftTerm = Term . (. CXANil) . unTerm
 
-varTm :: Term (CCons a CNil) a
-varTm = Term CXAId
+contractTerm :: Term (CCons a (CCons a cxt)) b  -> Term (CCons a cxt) b
+contractTerm = Term . (. CXADiag) . unTerm
+
+varTerm :: Term (CCons a CNil) a
+varTerm = Term CXAId
 
 appArrow :: CxtArr c d -> Term d a -> Term c a
 appArrow h (Term g) = Term $ g . h
@@ -192,9 +205,9 @@ runit = weakenTerm
 rmap :: Term cxt (TExp a b) -> Term cxt a -> Term cxt b
 rmap = appTerm
 
--- need contraction / diagonal
--- rjoin :: Term (CCons b (CCons b cxt)) a -> Term (CCons b cxt) a
--- rjoin f = _
+rjoin :: Term (CCons b (CCons b cxt)) a -> Term (CCons b cxt) a
+rjoin = contractTerm
+
 
 -- To be done, explore if LamTerm gives proper derivability vs. admissibility rule
 -- Todo -- see if we want to distinguish the simplicial structure of contexts from the value stucture?
