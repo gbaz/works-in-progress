@@ -57,17 +57,6 @@ genTerm x = go x (empty,[])
           ss = go n . (,CS:os) =<< shift c
           cs = go n . (,CC:os) =<< close c
 
-termToLam :: [Op] -> String
-termToLam xs = go ['a'..'z'] [] (reverse xs)
-  where go (n:ns) cxt (CI:os) = ('(':'\\':n:'.':[]) ++ go ns (n:cxt) os
-        go ns (v:cxt) (CS:os) = '[':v : go ns cxt os
-        go ns (cxt) (CA:os) = ']': go ns cxt os -- halp
-        go ns cxt (CC:os) = ")" ++ go ns cxt os
-        go ns cxt [] = []
-        go ns cxt os = error $ show (ns, cxt, os)
-
-sgt = mapM_ putStrLn . map termToLam . map snd . genTerm
-
 data FOL = Bind String FOL | App FOL FOL | Var String deriving Show
 
 --termToFOL :: [OP] -> FOL
@@ -90,3 +79,11 @@ showFOL (App x y) = "("++showFOL x ++ ")(" ++ showFOL y ++ ")"
 showFOL (Var s) = s
 
 sft = mapM_ putStrLn . map showFOL . map termToFOL . map snd . genTerm
+
+-- sft 3 gives 34, but should give 32!
+
+{-
+
+
+
+-}
