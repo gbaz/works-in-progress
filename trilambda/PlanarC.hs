@@ -41,8 +41,8 @@ close _ = []
 
 data Op = CI | CA | CS | CC deriving (Read, Show, Eq, Ord)
 
-genTerm :: Int -> [(C,[Op])]
-genTerm x = go x (empty,[])
+genTerm :: Int -> [[Op]]
+genTerm x = map snd $ go x (empty,[])
   where go n (c,os) = is ++ ss ++ as ++ cs
          where
           is | n == 0 = if c == C [Z] [S Z] then [(c,os)] else []
@@ -57,12 +57,12 @@ data FOL = Bind String FOL | App FOL FOL | Var String deriving Show
 termToFOL xs =  snd $ go ['a'..'z'] [] [] (reverse xs)
   where go ns cxt [t] [] = (([],[],[],[]),t)
         go (n:ns) cxt tms (CI:os) =
-                  let ((ns', cxt', tms', os'),body) =  go ns (cxt++[n]) [] os
+                  let ((ns', cxt', tms', os'),body) =  go ns (n:cxt) [] os
                   -- should be cxt == cxt'
                   in go ns' cxt' ((Bind (n:[]) body) : tms) os'
         go ns (v:cxt) tms (CS:os) = go ns cxt ((Var (v:[])):tms) os
-        go ns (cxt) tms (CA:os) = case reverse tms of
-                                       (t1:t2:ts) -> go ns cxt (reverse $ (App t1 t2) :ts) os
+        go ns (cxt) tms (CA:os) = case tms of
+                                       (t1:t2:ts) -> go ns cxt ((App t1 t2) :ts) os
         go ns cxt (t:[]) (CC:os) = ((ns,cxt,[],os),t)
 
         go ns cxt tms os = error $ show (ns, cxt, tms, os)
@@ -72,8 +72,8 @@ showFOL (Bind s x) = "\\"++s++"."++showFOL x
 showFOL (App x y) = "("++showFOL x ++ ")(" ++ showFOL y ++ ")"
 showFOL (Var s) = s
 
--- term generation is right, printing algo is busted!
-sft = mapM_ putStrLn . map showFOL . map termToFOL . map snd . genTerm
+-- term generation is right, printing algo is probably right but alpha namings can be nonintuitive
+sft = mapM_ putStrLn . map showFOL . map termToFOL . genTerm
 
 {-
 
