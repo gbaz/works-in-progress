@@ -108,4 +108,4 @@ instance (Effect m) => Applicative (WrapEff m) where
 
 -- thm relating distribution over monads and distribution over resultant applicatives -- when does the latter induce the former?
 
--- also when does a WrapEff a
+-- also when does a WrapEff a actually yield a monad?
