@@ -5,6 +5,11 @@ import GHC.Exts ( Constraint )
 import Data.Maybe (mapMaybe)
 -- import GHC.TypeLits
 
+-- cf http://conferences.inf.ed.ac.uk/clapscotland/uustalu.pdf
+-- https://www.cs.kent.ac.uk/people/staff/dao7/publ/combining-effects-and-coeffects-icfp16.pdf
+
+-- Effect is a cut down version of graded monads as per https://hackage.haskell.org/package/effect-monad
+
 {-| Specifies "parametric effect monads" which are essentially monads but
      annotated by a type-level monoid formed by 'Plus' and 'Unit' -}
 class Effect (m :: k -> * -> *) where
@@ -89,6 +94,18 @@ instance Show a => Show (WrapEff Vec a) where show (WrapEff x) = show x
 instance (Effect m) => Functor (WrapEff m) where
   fmap f (WrapEff x) = WrapEff (efmap f x)
 
+-- conjecture: every WrapEff of an effect does not necc obey the monad laws, but will obey the applicative laws
+
 instance (Effect m) => Applicative (WrapEff m) where
   pure = WrapEff . ereturn
   WrapEff x <*> WrapEff y = WrapEff $ x `ebind` \x1 -> y `ebind` \y1 -> ereturn (x1 y1)
+
+-- for Vec this recovers ZipList
+
+-- we should be able to give a "times" monoid as well and recover the max-times algebra!
+
+-- todo writer as a graded monad.
+
+-- thm relating distribution over monads and distribution over resultant applicatives -- when does the latter induce the former?
+
+-- also when does a WrapEff a
