@@ -7,6 +7,7 @@ import Control.Monad.Writer
 import Control.Monad.State
 import Data.Functor.Compose
 import Debug.Trace
+import Control.Applicative
 
 
 {-
@@ -65,63 +66,90 @@ shiftStream :: Monoid a => Later (Stream a) -> Stream a
 shiftStream = Cons mempty
 
 
--- what's the law for shift?
--- not just commuting with pure later, but commuting up to a hidden delay, with what semantics?
-
 -- can we use lattice theory to get infinite monoid generalizations?
 
 -- can we sequence a stream of streams?
 
+-- credit for name predict to James Deikun
 
-class Diff f where
-  -- predict
-  shift :: Later (f a) -> f (Later a)
+class Predict f where
+  predict :: Later (f a) -> f (Later a)
+  -- can't give check :: f (Later a) -> Later (f a) because of reader.
+  -- this really blows up in the case of the update monad.
+  -- we can factorize out the delay in the state, but that's sort of uninteresting
   delay :: f a -> f a
 
--- shift . pure = pure . delay
--- traverse pure = delay^n . pure
+-- we need an evaluate morphism :: f a -> Eventually (f a) and the property that delay . evaluate = id. delay should be uniquely defined by the predict . pure equation.
 
--- recover :: f a -> Eventually f a
--- recover . delay =~ id
--- recover . shift =~ id
+-- the law should be an interaction with applicative
+-- fmap Later . liftA2 (,) x == liftA2 (,) x . predict . Later !!!!
+
+-- or rather
+-- \x y -> (fmap (fmap Later) . liftA2 (,) x) y == (liftA2 (,) x . predict . Later) y
+
+testProp x y = (fmap (fmap Later) . liftA2 (,) x) y == (liftA2 (,) x . predict . Later) y
+
+testProp1 x y = (fmap (fmap Later) . liftA2 (,) x) y
+
+testProp2 x y = (liftA2 (,) x . predict . Later) y
+
+w1 = tell (Cons 1 (Later Nil)) :: Writer (Stream (Sum Int)) ()
+w2 = tell (Cons 3 (Later Nil)) :: Writer (Stream (Sum Int)) ()
+
+-- sidenote: we can anti-commute a reader over finite but not in general
+foo :: (Bool -> Later a) -> Later (Bool -> a)
+foo f = (\t f x -> if x then t else f) <$> (f True) <*> (f False)
+
+-- predict . pure = fmap Later . delay
+-- sequence . fmap pure = delay^n . pure ?
+
+-- check :: f a -> Eventually f a
+-- check . delay =~ id
+-- recover . predict =~ id
 
 -- law for diff. not exactly if you erase laters you get the same thing.
--- take law for traversals, put in this setting, induce a law for Diff
+-- take law for traversals, put in this setting, induce a law for Predict
 -- distributive law, sort of?
 
 -- we can state the traversable law with delay, but we need recover or the like to state the full diff law!
 
 -- any structure that's traversable is infinitely traversable, prove this
 
-instance Diff Later where
-  shift = id
+instance Predict Later where
+  predict = id
+  delay = id
 
-instance Diff Identity where
-  shift = Identity . fmap runIdentity
+instance Predict Identity where
+  predict = Identity . fmap runIdentity
+  delay = id
 
-instance Diff (Reader r) where
-  shift x = reader $ \r -> fmap (($ r) . runReader) x
+instance Predict (Reader r) where
+  predict x = reader $ \r -> fmap (($ r) . runReader) x
+  delay = id
 
-instance Monoid w => Diff (Writer (Stream w)) where
-  shift x = writer $ (fst . runWriter <$> x, shiftStream $ snd . runWriter <$> x)
+instance Monoid w => Predict (Writer (Stream w)) where
+  predict x = writer $ (fst . runWriter <$> x, shiftStream $ snd . runWriter <$> x)
+  delay x = case runWriter x of
+     (x, y) -> writer (x, shiftStream $ pure y)
 
 class Sequence t where
-  ssequence :: (Applicative f, Diff f) => t (f a) -> f (t a)
+  ssequence :: (Applicative f, Predict f) => t (f a) -> f (t a)
 
 instance Sequence Stream where
   ssequence = lfix $ \rec x -> case x of
      Nil -> pure Nil
-     Cons a s -> Cons <$> a <*> shift (rec <*> s)
+     Cons a s -> Cons <$> a <*> predict (rec <*> s)
 
 data Tree a = TNil | TBranch a (Later (Tree a)) (Later (Tree a)) deriving (Functor, Show)
 
 instance Sequence Tree where
   ssequence = lfix $ \rec x -> case x of
      TNil -> pure TNil
-     TBranch a x y -> TBranch <$> a <*> shift (rec <*> x) <*> shift (rec <*> y)
+     TBranch a x y -> TBranch <$> a <*> predict (rec <*> x) <*> predict (rec <*> y)
 
-instance (Functor f, Diff f, Diff g) => Diff (Compose f g) where
-  shift = Compose . fmap shift . shift . fmap getCompose
+instance (Functor f, Predict f, Predict g) => Predict (Compose f g) where
+  predict = Compose . fmap predict . predict . fmap getCompose
+  delay (Compose x) = Compose (fmap delay . delay $ x)
 
 data Update s a = Update {runUpdate :: (Stream s -> (Stream s,a))} deriving Functor -- stream of s to single s
 
@@ -132,8 +160,10 @@ instance Monoid s => Applicative (Update s) where
 instance Monoid s => Monad (Update s) where
   Update x >>= f = Update $ \s -> let (u, x') = x s in runUpdate (f x') (u <> s)
 
-instance Monoid s => Diff (Update s) where
-  shift x = Update $ \s -> ( shiftStream $ fmap (fst . ($ s) . runUpdate) x, fmap (snd . ($ s) . runUpdate) x)
+instance Monoid s => Predict (Update s) where
+  predict x = Update $ \s -> let rxs = fmap (($ s) . runUpdate) x in
+   (shiftStream (fmap fst rxs), fmap snd rxs)
+  delay x = Update $ \s -> let (a, b) = runUpdate x s in (shiftStream . pure $ a, b)
 
 
 
@@ -161,8 +191,11 @@ getU f = Update $ \s -> (Nil, f s)
 goU (Update f) = f Nil
 
 
-instance Monoid s => Diff (State (Stream s)) where
-  shift x = state $ \s -> (fmap (\z -> fst . runState z $ s) x, shiftStream . fmap (\z -> snd . runState z $ s) $ x)
+instance Monoid s => Predict (State (Stream s)) where
+  predict x = state $ \s -> let rs = fmap (`runState` s) x
+                            in (fmap fst rs, shiftStream (fmap snd rs))
+  delay x = state $ \s -> let rs = runState x s
+                            in (fst rs, shiftStream . pure . snd $ rs)
 
 one :: a -> Stream a
 one x = Cons x $ Later Nil
@@ -180,7 +213,7 @@ straverse g = ssequence . fmap g
 
 -- this is precisely stream transducers
 
--- nb, can shift necessarily infinite streams, but not possibly terminating ones
+-- nb, can predict necessarily infinite streams, but not possibly terminating ones -- gotta write a distinct stram type
 
 instance Applicative Stream where
   pure a = Cons a . Later $ pure a
@@ -201,12 +234,13 @@ instance Applicative Stream where
                   sappend xs (Later ys) = trace "sappend" $ listToStream (streamToList xs <> streamToList ys)
 -}
 
-instance Diff Stream where
-  shift x = Cons (fmap headPartial x) (fmap (shift . tailPartial) x) -- not using lfix?
+instance Predict Stream where
+  predict x = Cons (fmap headPartial x) (fmap (predict . tailPartial) x) -- not using lfix?
      where headPartial (Cons e _) = e
            headPartial _ = error "headPartial" -- works for infinite streams but not normal streams.
            tailPartial (Cons x xs) = xs
            tailPartial Nil = error "nil"
+  delay = id
 
 tfS = listToStream [True, False]
 
@@ -246,30 +280,30 @@ WriterT (Identity (Cons 1 (Later (Cons 2 (Later (Cons 4 (Later Nil))))),Cons (An
 instance Sequence Stream where
   ssequence = lfix $ \rec x -> case x of
      Nil -> pure Nil
-     Cons a s -> Cons <$> a <*> shift (rec <*> s)
+     Cons a s -> Cons <$> a <*> predict (rec <*> s)
 
 instance (Functor f, Diff f, Diff g) => Diff (Compose f g) where
-  shift = Compose . fmap shift . shift . fmap getCompose
+  predict = Compose . fmap predict . predict . fmap getCompose
 
 -- sequence of a composed stream
   ssequence = case x of
      Nil -> pure Nil
-     Cons a s -> Cons <$> a <*> (Compose . fmap shift . shift . fmap getCompose) (ssequence s)
+     Cons a s -> Cons <$> a <*> (Compose . fmap predict . predict . fmap getCompose) (ssequence s)
 
 -- sequence of a plain stream
   ssequence = case x of
      Nil -> pure Nil
-     Cons a s -> Cons <$> a <*> shift (ssequence s)
+     Cons a s -> Cons <$> a <*> predict (ssequence s)
 
 -- fmap of sequence of a plain stream -- we substitute in the case on the created stream
-  ssequence = case Cons a (shift (ssequence s)) of
-     Cons a s1 -> Cons <$> a <*> shift (ssequence s1)
+  ssequence = case Cons a (predict (ssequence s)) of
+     Cons a s1 -> Cons <$> a <*> predict (ssequence s1)
 
 -- substitute
-  ssequence = case Cons a (shift (ssequence s)) of
-     Cons a s1 -> Cons <$> a <*> shift (ssequence ((shift (ssequence s))))
+  ssequence = case Cons a (predict (ssequence s)) of
+     Cons a s1 -> Cons <$> a <*> predict (ssequence ((predict (ssequence s))))
 
--- ssequence doubled should somehow turn into needing to fmap the shift into it.
+-- ssequence doubled should somehow turn into needing to fmap the predict into it.
 
 -- equationally this should work, somehow
 
@@ -278,7 +312,7 @@ instance (Functor f, Diff f, Diff g) => Diff (Compose f g) where
 -- can we prove a "representation theorem" for infinite traversals?
 https://www.cs.ox.ac.uk/jeremy.gibbons/publications/uitbaf.pdf
 
--- shift . unshift
+-- predict . unpredict
 -}
 {-
 
@@ -289,8 +323,8 @@ class LApplicative f i where
   lap   :: f i (a -> b) -> f (Compose Later i) a -> f i b
 
 class LDiff f where
-  lshift :: Later (f i a) -> f (Compose Later i) (Later a)
-  lunshift :: f i a -> f (Compose Later i) a
+  lpredict :: Later (f i a) -> f (Compose Later i) (Later a)
+  lunpredict :: f i a -> f (Compose Later i) a
 
 class Sequence t where
   ssequence :: (Functor (f i), LApplicative f i, LDiff f) => t (f i a) -> f i (t a)
@@ -299,14 +333,14 @@ class Sequence t where
 instance Sequence Stream where
   ssequence = lfix $ \rec x -> case x of
      Nil -> lpure Nil
-     Cons a s -> (Cons <$> a) `lap` (lshift $ rec <*> s)
+     Cons a s -> (Cons <$> a) `lap` (lpredict $ rec <*> s)
 
 data Tree a = TNil | TBranch a (Later (Tree a)) (Later (Tree a)) deriving (Functor, Show)
 
 instance Sequence Tree where
   ssequence = lfix $ \rec x -> case x of
      TNil -> lpure TNil
-     TBranch a x y -> (TBranch <$> a) `lap` (lshift $ rec <*> x) `lap` (lshift $ rec <*> y)
+     TBranch a x y -> (TBranch <$> a) `lap` (lpredict $ rec <*> x) `lap` (lpredict $ rec <*> y)
 
 
 -- lapplicative instances
@@ -317,8 +351,8 @@ instance LApplicative (IReader r) i where
   lap (IReader f) (IReader x) = IReader $ \r -> (f r) (x r)
 
 instance LDiff (IReader r) where
-  lshift x = IReader $ \r -> fmap (($ r) . runIReader) x
-  lunshift (IReader x) = IReader x
+  lpredict x = IReader $ \r -> fmap (($ r) . runIReader) x
+  lunpredict (IReader x) = IReader x
 
 -- can pushindexing in to writer, get rid of it.
 
@@ -327,7 +361,7 @@ data IWriter w i a = IWriter {runIWriter :: (i (Stream w), a)}
 
 instance (Monoid w, Applicative i, Diff i) => LApplicative (IWriter w) i where
   lpure x = IWriter (pure mempty, x)
-  lap (IWriter (s, f)) (IWriter (s', x)) = IWriter (mappend <$> s <*> (fmap shiftStream . shift . getCompose $ s'), f x)
+  lap (IWriter (s, f)) (IWriter (s', x)) = IWriter (mappend <$> s <*> (fmap shiftStream . predict . getCompose $ s'), f x)
 
 -}
 -- what algebraic structure corresponds to trees?
