@@ -1,0 +1,476 @@
+\documentclass[hoptionsi,review,format=sigplan]{acmart}
+\usepackage{geometry}                		% See geometry.pdf to learn the layout options. There are lots.
+\geometry{letterpaper}                   		% ... or a4paper or a5paper or ...
+%\geometry{landscape}                		% Activate for rotated page geometry
+%\usepackage[parfill]{parskip}    		% Activate to begin paragraphs with an empty line rather than an indent
+\usepackage{graphicx}				% Use pdf, png, jpg, or eps§ with pdflatex; use eps in DVI mode
+								% TeX will automatically convert eps --> pdf in pdflatex
+\usepackage{minted}
+\setminted[haskell]{escapeinside=@@}
+
+\newenvironment{code}
+ {\VerbatimEnvironment
+  \begin{minted}[fontsize=\small]{haskell}}
+ {\end{minted}}
+
+\newenvironment{codex}
+ {\VerbatimEnvironment
+  \begin{minted}[fontsize=\small]{haskell}}
+ {\end{minted}}
+ 
+\newcommand{\hs}{\mintinline[fontsize=\small]{haskell}}
+
+\newtheorem{theorem}{Theorem}
+
+\title[Traversals of Infinite Structures]{A Predictable Outcome: An Investigation of Traversals of Infinite Structures}
+\author{Gershom Bazerman}
+\affiliation{%
+  \institution{Awake Security}
+  \city{San Jose}
+  \country{USA}
+}
+
+%\date{}							% Activate to display a given date or no date
+
+\begin{abstract}
+Functors with an instance of the \hs{Traversable} type class can be thought of as data structures which permit a traversal of their elements. This has been made precise by the correspondence between traversable functors and finitary containers (aka polynomial functors). This correspondence was established in the context of total, necessarily terminating, functions. However, the Haskell language is non-strict and permits functions that do not terminate. It has long been observed that traversals can at times, in practice, operate over infinite lists, for example in distributing the Reader applicative. The result of such a traversal remains an infinite structure, however it nonetheless is productive -- i.e. successive amounts of finite computation yield either termination or successive results. To investigate this phenomenon, we draw on tools from guarded recursion, making use of equational reasoning internal to Haskell. This is done by introducing a formal \hs{Later} modality in the form of an applicative functor, with an associated \hs{Eventually} monad, and introducing a bisimilarity relation on the latter. Using these tools, it transpires that for a traversal to be possibly infinite is less a restriction on the structure being traversed, but rather a restriction on the applicative performing the traversal -- in particular such an applicative must commute with \hs{Later} up to bisimilarity. We term such functors \hs{Predictable} and investigate their structure, providing a range of examples, and showing how this form of analysis allows fine-grained distinctions to be made on the behavior of various operations.
+\end{abstract}
+
+\begin{document}
+\maketitle
+
+\section{Introduction}
+Traversable functors, first introduced by [CITE MCBRIDE], provide a sort of "complement" to the Applicative type class. While the Applicative type class picks out functors which have a (closed) lax-monoidal structure, the Traversable type class picks out functors which can distribute over this monoidal structure. We recall below the definitions of Applicative and Traversable which we will be generalizing in this paper:
+
+\begin{codex}
+class Functor f => Applicative f where
+     pure :: a -> f a
+    (<*>) :: f (a -> b) -> f a -> f b      
+    
+class Functor t => Traversable t where
+    sequence :: Applicative f => t (f a) -> f (t a)
+\end{codex}
+
+
+Typically the Traversable type class is given by an operation \hs{traverse} rather than \hs{sequence} but the former is given by \hs{traverse = sequence . fmap} and the latter is conceptually clearer for our purposes.
+
+By results (independently) of [GIBBONS, OCONNOR] it was established that in a total setting, traversable functors correspond to finitary containers, which is to say that any traversable functor is equivalent to one given as the sum of finite products of its underlying element. Recursive structures in the Haskell language are however, not necessarily finitary. For example, the list functor includes lists which have infinite numbers of elements, aka streams. Often, as defined in Haskell, traversals naturally operate on such infinite structures. As a trivial example, \hs{sequence (repeat id) 1}, which makes use of the \hs{Reader} applicative yields an infinite list \hs{[1,1,1...]}.
+
+However, not all applicative functors are conducive to infinite traversals. For example, \hs{sequence (repeat (Just 1))} yields $\bot$.
+
+And more interestingly yet, some applicative functors allow traversals that are only productive (non-bottom) in some \emph{portion} of their results. For example, making use of the \hs{State} monad:
+
+\begin{codex}
+runState (sequence (repeat (modify (+1) >> get))) 0
+\end{codex}
+
+yields a tuple whose first projection is the infinite list \hs{[1,2,3...]} and whose second projection is $\bot$.
+
+Internal algebraic reasoning about functions like these can be rather tricky. This paper will draw on the toolkit of guarded recursion to provide a straightforward way of thinking about such functions using standard equational reasoning, and then, making use of this tool, describe a class of functors, which we term \hs{Predictable} functors, that are suited to performing infinite traversals.
+
+\section{Equipping Haskell with a Formal Later modality}
+
+In 2000, Nakhano introduced a typed modal logic for self referential formulae which took semantics in a typed lambda calculus with a modality for guarded recursion. In such a setting, types are able to capture when certain data must be evaluated in order for further evaluation to proceed. A term of type \hs{a} which cannot yet be evaluated is given the type \hs{Later a}, expressing that it may be passed around abstractly, but its structure is not yet necessarily available for computation. In such a setting, there is necessarily no general function \hs{forall a. Later a -> a}, nor is there a general fixpoint operator. However, guarded recursion is allowed in the form of a function \hs{lfix :: (Later a -> a) -> a}. This says "if you give provide a function that "embeds" a \hs{Later a} into an \hs{a}, then it can be iterated." Such a function allows a fixpoint because the input function, by construction, cannot evaluate the thing it is given, only manipulate it abstractly. Hence, the \hs{Later} modality makes explicit the rule of thumb that programmers who work with the fixpoint operator have already internalized.
+
+In a system like this, necessarily finite and possibly infinite data are distinguished through the use of the \hs{Later} modality. Consider for example, the types
+\begin{code}
+data List a = 
+     LNil 
+   | LCons a (List a)}
+   
+data Stream a = 
+     Nil
+   | Cons a (Later (Stream a))
+\end{code}
+The former is necessarily finite, as without a general fixpoint operator, no infinite inhabitant can be constructed. However, the latter is possibly infinite. For example, \hs{lfix (Cons 1)} will produce an infinite stream of ones.
+
+ By an insight of Atkey and McBride, aside from \hs{lfix}, the later modality has exactly the operations of an applicative functor. In particular, we have:
+ 
+ \begin{codex}
+ later :: a -> Later a
+ lap :: Later (a -> b) -> Later a -> Later b
+ \end{codex}
+ 
+Further, in combination these induce functoriality. These operations come with natural intuitions corresponding to the intended meaning of \hs{Later}. "If I know something know, I still know it later. If I will have a function later, and I will have a value later, then later I also will be able to have the result of applying that function to that value."
+ 
+The recognition of \hs{Later} as an applicative functor means that one can program in a fragment of Haskell which enjoys the same properties as a type system with genuine guarded recursion -- i.e. infinite structures can be manipulated in a fashion such that no function yields $\bot$. The recipe for doing so is painfully simple. One simply introduces an abstract datatype equipped with the proper type class instances, and an \hs{lfix} operator, and then does not export its eliminator. 
+
+This is to say one introduces a module supplying the following, and for all code in the fragment we are reasoning about, does not import the constructor \hs{Later}, thus enforcing abstraction.
+
+\begin{code}
+newtype Later a = Later a deriving Functor
+
+instance Applicative Later where
+  pure = Later
+  Later f <*> Later x = Later (f x)
+
+lfix :: (Later a -> a) -> a
+lfix f = fix (f . pure)
+\end{code}
+
+Further, for all code in sight, one adheres to the discipline of not allowing any direct recursion to occur, and instead using the \hs{lfix} operator uniformly. Working with this sort of discipline without compiler support is not necessarily a good approach for genuine programming in the large. However, for small-scale equational reasoning it suffices, as the condition is straightforward to check by hand.
+
+In the course of this paper, we will refer to terms written with the above discipline (making use of \hs{Later} and \hs{lfix} with no explicit recursion) as guarded recursive terms, and generally to code written with this discipline as in the guarded recursive fragment. Additionally, we will refer to datatypes which make use of the \hs{Later} modality (such as \hs{Stream}) as guarded datatypes, and types of code written in the guarded recursive fragment as guarded recursive types.
+
+As an example of working in guarded recursive fragment, we present a function for interleaving possibly infinite streams, as well as merging them with a (truncated) zip. We leave it as an exercise to verify that, e.g., the \hs{reverse} function cannot be written.
+
+\begin{code}
+sinterleave :: Stream a -> Stream a -> Stream a
+sinterleave = lfix $ \f s1 s2 -> case s1 of
+  (Cons x xs) -> Cons x (f <*> pure s2 <*> xs)
+  _ -> s2
+
+szip :: Stream a -> Stream b -> Stream (a, b)
+szip = lfix $ \f s1 s2 -> case (s1, s2) of
+  (Cons x xs, Cons y ys) -> Cons (x,y) (f <*> xs <*> ys)
+  _ -> Nil
+\end{code}
+
+We will also want to consider functions which are only possibly productive -- i.e. where there may be arbitrary sequences of \hs{Later} applications. These can be captured by a \hs{Delay} type, following Capretta.
+
+\begin{code}
+data Delay a = Now a | Wait (Later (Delay a))
+\end{code}
+
+Using this type, one can, for example write a function to compute the last element (should it exist) of a possibly infinite stream.
+
+\begin{code}
+slast :: Stream a -> Delay (Maybe a)
+slast = go Nothing
+  where go = lfix $ \f def s1 ->
+         case s1 of
+          (Cons x xs) -> Wait $ f <*> pure (Just x) <*> xs
+          Nil -> Now def
+\end{code}
+
+This type can also be used to capture structures that are possibly productive, such as possibly productive infinite streams:
+
+\begin{code}
+data PStream a = 
+      PNil 
+    | PCons a (Delay (PStream a))
+\end{code}
+
+
+\section{Predictable functors and infinite traversals}
+
+With the above tools in hand, we are ready to provide an informal introduction to the central idea of this paper. The forward implication of the correspondence between traversable functors and finitary containers is simply the observation that traversable functors are closed under sum and product. The goal is to extend traversals to handle guarded types such as \hs{Stream}. Hence, we need to close "infinite-traversable" functors under sum, product, and also composition with \hs{Later}. This amounts to having (an appropriately lawful) function \hs{Later (t (f a)) -> f (Later (t a))}. But this decomposes into \hs{fmap sequence :: Later (t (f a)) -> Later (f (t a))} composed with a function \hs{predict :: Later (f a) -> f (Later a)}. This latter function makes no mention of \hs{t} and so it is effectively not a property of traversable functors, but rather of the applicative functors used to traverse them. This motivates defining a type class, \hs{Predictable} as follows:
+
+\begin{code}
+class Predictable f where
+  predict :: Later (f a) -> f (Later a)
+\end{code}
+
+And, in turn, we can now define a candidate type class for infinite-traversable functors:
+
+\begin{code}
+class ITraversable t where
+  isequence :: (Applicative f, Predictable f) => t (f a) -> f (t a)
+\end{code}
+
+Since these classes are for reasoning in the guarded recursive fragment, we require that their instances be given only using tools from that fragment.
+
+As an example, here is the \hs{ITraversable} instance for \hs{Stream}.
+
+\begin{code}
+instance ITraversable Stream where
+  isequence = lfix $ \rec x -> case x of
+     Nil -> pure Nil
+     Cons a s -> 
+         Cons
+           <$> a 
+           <*> predict (rec <*> s)
+\end{code}
+
+Syntactically, it looks nearly the same as the \hs{Traversable} instance for lists, but it makes a judicious use of \hs{predict} to align the \hs{Later} uses in the course of the traversal.
+
+In general, for any strictly positive recursive datatype, one can construct a related, "potentially infinite" guarded datatype by syntactically guarding each recursive occurrence by \hs{Later}. Since any \hs{Traversable} datatype can be written as such a strictly positive type, then it follows that for every \hs{Traversable} datatype there is a related guarded datatype which can be given an instance of \hs{ITraversable}.
+
+As a further example of this, we give the a binary tree with labeled intermediate nodes, as well as a guarded version of it, and a corresponding \hs{ITraversable} instance for the latter:
+
+\begin{code}
+-- "normal" tree
+data Tree a = TNil | Branch a (Tree a) (Tree a)
+
+-- guarded tree
+data ITree a = ITNil | ITBranch a (Later (ITree a)) (Later (ITree a))
+
+-- corresponding infinite traversable instance
+instance ITraversable ITree where
+  itraverse = lfix $ \rec x -> case x of
+     ITNil -> pure ITNil
+     ITBranch a x y -> ITBranch <$> a <*> predict (rec <*> x) <*> predict (rec <*> y)
+\end{code}
+
+The next question to consider is when an applicative functor may be given a valid \hs{Predictable} instance. However, this requires specifying what a "valid" predictable instance is. In turn, to do so, some new tools must be developed. The general idea is that our use of types to track guarded recursion in a fragment of Haskell is merely a way of "annotating" existing code to make it make sense.
+
+\section{Bisimilarity by evaluation}
+
+It is important to note that \hs{Later} is not a monad, and in particular, there is no function of the form:
+\begin{code}
+forall a. Later (Later a) -> Later a
+\end{code} 
+
+Intuitively, if such a thing existed, it would "collapse" all future timesteps into a single timestep. As such, it would allow unguarded recursion as long as it occurred under at least a single \hs{Later}. (Notably, Capretta's \hs{Delay} monad for reasoning about partiality has such a property, and can be seen as the free monad given rise to by the Later functor).
+
+Nonetheless, we wish to use the guarded recursion modality to reason about terms in Haskell -- a nonstrict language with general recursion. As such, we want to consider equivalence between terms of type \hs{Later a} and \hs{Later (Later a)}, for example. The appropriate notion of equivalence between terms in a nonstrict setting, like that between concurrent terms, should be some form of bisimilarity. In essence, we wish terms to be considered equivalent if under some sequence of abstract observations, each contains the same data, with the same ordering dependency. 
+
+Put another way, the reason we do not want a morphism from \hs{Later (Later a)} to \hs{Later a} is because this would allow a use of \hs{lfix} to perform unbounded recursion. However, for purposes of reasoning about equivalence, rather than calculation, such a map is reasonable. In fact, we can go further. For purposes of reasoning up to equivalence, a map \hs{Later a -> a} is reasonable as well. In fact, in general, since \hs{Later} is a newtype, there will be an associated map from any type with \hs{Later} involved to one without \hs{Later} involved, which, considered purely as a Haskell type, will be isomorphic. The general idea is that terms may defined in a total setting where there is no general map \hs{Later a -> a} and all recursion is via \hs{lfix}. However, bisimilarity between terms is calculated by "evaluating" these terms to a nonstrict setting with general recursion, and then calculating equivalence using the standard tools of denotational semantics. Put another way: rather than constructing a theory of bisimilarity on guarded recursive types intended to capture when they are equivalent in a nonstrict, recursive setting, we simply construct a procedure for evaluating such types to a nonstrict, recursive setting, and directly reason about their equivalence using tools that already exist.
+
+We can represent this internally in Haskell by means of a type class with an associated type:
+
+\begin{code}
+class EvalLater a where
+  type Result a
+  leval :: a -> Result a
+\end{code}
+
+The most important instance is a recursive instance that strips away an outer \hs{Later} and proceeds to continue to evaluate the result. Additionally, all ground types we wish to consider must be equipped with an appropriate instance, and instances for products, sums, and soforth all arise very mechanically. This code is not part of the guarded recursive fragment we are reasoning about, but rather belongs to the equational metatheory, and thus freely pattern matches on \hs{Later}. Some example instances are as follows.
+
+\begin{code}
+instance EvalLater a => EvalLater (Later a) where
+  type Result (Later a) = Result a
+  leval (Later x) = leval x
+
+instance EvalLater Int where
+  type Result Int = Int
+  leval x = x
+
+instance (EvalLater a, EvalLater b) => EvalLater (a, b) 
+  where
+    type Result (a, b) = (Result a, Result b)
+    leval (x, y) = (leval x, leval y)
+\end{code}
+
+The only slight complication arises in the case of guarded types, which may themselves make use of \hs{Later}. In such a case, the need for an associated type becomes very clear, as we are evaluating to an entirely different type, which we have established is isomorphic, rather than to a type obviously syntactically related to the given type. For example, partially infinite streams may be evaluated like so:
+
+\begin{code}
+instance EvalLater a => EvalLater (Stream a) where
+  type Result (Stream a) = [Result a]
+  leval Nil = []
+  leval (Cons x  xs) = leval x : leval xs
+\end{code}
+
+Corresponding instances can also be written for possibly productive structures, such as below:
+
+\begin{code}
+instance EvalLater a => EvalLater (Delay a) where
+  type Result (Delay a) = Result a
+  leval (Now x) = leval x
+  leval (Wait x) = leval x
+
+instance EvalLater a => EvalLater (PStream a) where
+   type Result (PStream a) = [Result a]
+   leval PNil = []
+   leval (PCons x xs) = leval x : leval xs
+\end{code}
+
+As we noted early on, when working in the guarded recursive fragment of the language, recursive structures which do not make use of \hs{Later} are already necessarily finite. As such, evaluation on them remains a purely formal operation. For example, for lists we have:
+
+\begin{code}
+instance EvalLater a => EvalLater [a] where
+  type Result [a] = [Result a]
+  leval xs = fmap leval xs
+\end{code}
+
+We will refer to structures which do not make use of \hs{Later} either directly or indirectly as \emph{finite} with regards to the guarded recursive fragment. Finite functors all enjoy the property that \hs{leval = fmap leval}.
+
+We may now define \emph{evaluated bisimilarity} of of two guarded recursive terms \hs{x} and {y} of types {a} and {b} as the condition that \hs{Result a = Result b} and further \hs{leval x} = \hs{leval y}. Further, we will call a function \hs{a -> b} a bisimilarity if it sends a term to a bismilar term. 
+
+Note that such terms may be of different guarded recursive types, as long as they share the same evaluated type. There is thus a sense in which guarded recursive types may be seen as fibered over standard Haskell types, providing for each such type a (partially ordered) set of possible refinements of evaluation dependency. For example, the types \hs{Stream a}, \hs{PStream a}, \hs{Later [a]}, and \hs{Later (Later [a])} all "live above" \hs{[a]}.
+
+
+\section{Properties of predictable functors}
+Somewhat trickier than asking when a guarded datatype is \hs{ITraversable} is the question of when an applicative functor is \hs{Predictable}. Here, we consider some examples, and identify a large class of valid instances.
+
+\section{Examples (and nonexamples) of predictable functors and their traversals}
+
+We now revisit the examples from the introduction, showing how the machinery developed can aid in reasoning about infinite traversals. The \hs{Reader} monad is straightforwardly a predictable functor, and so is productive on infinite lists.
+
+\begin{code}
+instance Predict (Reader r) where
+  predict x = reader $ \r -> fmap (($ r) . runReader) x
+\end{code}
+
+The \hs{Writer w} monad introduces a complication -- to specify a \hs{Predict} instance one must specify a function on the monoid \hs{w} it carries of type \hs{Later w -> w}. As a very general example, when \hs{w} is a monoid, \hs{Delay w} has a natural monoid structure and so we have:
+
+\begin{code}
+instance Monoid w => Predict (Writer (Delay w)) where
+  predict x = writer $ (fst . runWriter <$> x, Wait $ snd . runWriter <$> x)
+\end{code}
+
+This expresses the fact that, in general, \hs{runWriter . sequence :: [Writer w a] -> ([a], w} will yield a nonbottom second projection only on the occasion that the input list is finite.
+
+However, for specific choices of \hs{w} there are more precise types possible. For instance, there is a straightforward Haskell instance of monoid for \hs{PStream a} -- the type of possibly productive streams. As such, we also have:
+
+\begin{code}
+instance Predict (Writer (PStream a)) where
+  predict x = writer $ (fst . runWriter <$> x, PWait $ snd . runWriter <$> x)
+\end{code}
+
+This expresses that when the accumulator of a writer is itself a list, then sequencing an infinite list can at times yield a productive second component -- in particular, if there are m writes within the first n terms of the list, then sequencing up to the first n terms of the list will yield m results in the second component.
+
+The \hs{State} monad presents difficulties similar to those of \hs{Writer}, but slightly more complicated. The most naive choice for a \hs{Predict} instance would be \hs{State (Delay s)}. But then at any individual point in a computation, the "real" state would be guarded by a \hs{Delay} operator and so appear not necessarily productively accessible. The property we want to capture is more subtle -- on an infinite list, the second projection of \hs{runState} is indeed bottom, as there is no "final" state. However, at any individual point in a \hs{State} computation, the state \emph{thus far} is immediately accessible. A more granular type to capture the productivity of \hs{State} can be achieved by moving to Uustalu and XX's algebraic decomposition of state into the pair of a reader and writer monads -- aka the \hs{Update} monad.
+
+% motivate predictable functor, state general rule, show how Later is itself not predictable, show that all polynomials generate guarded polynomials, and so generate infinitraversals
+\section{Bisimilarity for arrow types}
+
+Thus far, we have only considered evaluation as defined inductively on types that do not contain arrows. When we wish to consider evaluation on the function space, the need arises to go in the other direction as well -- that is, to \emph{lift} general values (which are posited to satisfy appropriate productivity conditions) back into the guarded recursive realm. We therefore introduce the following type class and instances which give the desired inverse:
+
+\begin{code}
+class EvalLater a => LiftLater a where
+  llift :: Result a -> a
+
+instance (LiftLater a, EvalLater b) => 
+  EvalLater (a -> b) where
+     type Result (a -> b) = Result a -> Result b
+     leval f = leval . f . llift
+
+instance (LiftLater a, LiftLater b) => 
+   LiftLater (a -> b) where
+     llift f = llift . f . leval
+\end{code}
+
+Inverses (up to bisimilarity) for various defined evaluations follow mechanically:
+
+\begin{code}
+instance (LiftLater a) => LiftLater (Later a) where
+  llift = Later . llift
+
+instance (LiftLater a) => LiftLater (Delay a) where
+  llift = Now . llift
+
+instance (LiftLater a, LiftLater b) => 
+   LiftLater (a, b) where
+     llift (x, y) = (llift x, llift y)
+
+instance LiftLater Int where
+  llift = id
+
+instance LiftLater String where
+  llift = id
+\end{code}
+
+It is important to note that these inverses do not, and cannot, send general Haskell terms to guarded recursive terms which are guaranteed productive. In particular, a guarded recursive construction of infinitely nested \hs{Delay} is perfectly reasonable, and under evaluation it goes to $\bot$. Lifting this back in turn does not land in guarded recursive terms (since such terms do not directly contain bottom) but rather in terms which make use of \hs{Later} but exist in general Haskell semantics -- so the lifting in a sense only goes "halfway" back. However, this halfway back intermediate form is all that is necessary for the bookkeeping of the ultimate goal, which is simply that \hs{leval} be defined properly on function types.
+
+
+\section{Productive applicatives are predictable}
+
+With the above tools in hand, we are ready to discuss the central idea of this paper. We will use lists as our examplar of traversable functors, equipped with the following function:
+
+\begin{code}
+sequenceL :: Applicative f => [f a] -> f [a]
+sequenceL = fix $ \rec x -> case x of
+  [] -> pure []
+  (x:xs) -> (:) <$> x <*> rec xs
+\end{code}
+
+We say that a finite applicative functor \hs{f} is productive on infinite lists if, when \hs{sequenceL} is instantiated at \hs{f}, the following property holds: $\forall n \in  \mathbb{N}. \, length \circ take \, n \circ sequenceL \neq \bot$.
+
+\begin{theorem}
+A finite applicative functor is productive on infinite lists if it may be equipped with a guarded recursive function \hs{predict :: forall a. Later (f a) -> f (Later a)} such that it is a bisimilarity.
+\end{theorem}
+
+\begin{proof}
+
+Definite a type class and function as below:
+
+\begin{code}
+class Predict f where
+  predict :: Later (f a) -> f (Later a)
+
+sequenceS :: (Applicative f, Predict f) =>
+           Stream (f a) -> f (Stream a)
+sequenceS = lfix $ \rec x -> case x of
+     Nil -> pure Nil
+     Cons a s -> 
+         Cons 
+           <$> a 
+           <*> predict (rec <*> s)
+\end{code}
+
+We now must show that \hs{leval sequenceS} is bisimilar to \hs{sequenceL}. To do so, it suffices to show that \hs{leval . sequenceS} is bisimilar to \hs{sequenceL . llift}. We can reason equationally as follows, beginning with making use of the fact that f is a finitary functor. We then substitute the definition of \hs{lfix}. Finally, we push the application of \hs{leval} through the case statement, and make use of the fact that \hs{predict}, \hs{llift} and \hs{leval} are all bisimilarities.
+
+\begin{codex}
+leval . sequenceS = fmap leval . sequenceS
+
+= fmap leval . fix $ \rec x -> case x of
+     Nil -> pure Nil
+     Cons a s -> 
+         Cons  
+           <$> a 
+           <*> predict (pure rec <*> s)
+           
+= fix $ \rec x -> fmap leval $ case x of
+     Nil -> pure Nil
+     Cons a s -> 
+         Cons  
+           <$> a 
+           <*> predict (fmap llift . rec <$> s)
+
+= fix $ \rec x -> case x of
+     Nil -> pure []
+     Cons a s -> 
+         (:) 
+           <$> a 
+           <*> leval (rec <$> s)
+\end{codex}
+
+By further equational substitution, it is apparent that this last term is equivalent to \hs{sequenceL . llift}, and so \hs{sequenceS} is bisimilar to \hs{sequenceL}, as desired. Because \hs{sequenceS} is written in the guarded recursive fragment, and so definitionally productive, so too is \hs{sequenceL}.
+\end{proof}
+
+It can also be shown that the existence of a function \hs{sequenceS} that evaluates down to \hs{sequenceL} suffices to necessitate a function \hs{predict} which is a bisimilarity.
+
+Given an \hs{x :: Later (f a)}, one can construct a stream \hs{pure _ : x : HNil}. Taking \hs{sequenceS} of this, the resultant type is \hs{f (Stream a)} and mapping the projection of the second element, one gets \hs{f (Later a)}, and by equational reasoning, this is bisimilar to the original \hs{x}.
+
+If we are in a setting such as the typed lambda calculus over which Nakhano specified the later modality, where it is established that all definable productive functions may be written using guarded recursion, then we know that \hs{sequenceL} being productive for a given applicative induces an appropriate \hs{sequenceS} for that applicative, and hence an appropriate \hs{predict}, at which point the implication of the above theorem becomes a bi-implication.
+
+This reverse implication, which is messy when considered over list traversals alone due to partiality, becomes immediate if one moves to a broader class of "infini-traversable" functor. In particular, under a definition where \hs{Later} itself is traversable, then \hs{predict} is simply \hs{lsequence} instantiated at \hs{Later}, i.e. at type \hs{Later (f a) -> f (Later a)}. We will consider such a class in [SECTION TK]
+
+
+
+\section{broader class of infinite traversable functors than streams?}
+
+ssequence :: t (f a) -> f (t a). if T itself is Later
+
+\section{The characterization theorem}
+
+A applicative functor is infinite traversable if for all n, `length. take n` is not bottom for sequence [f a]. 
+
+A applicative functor is infinite traversable iff there is a related functor given as a guarded recursive type such that G evaluates to F and G is a predictable applicative functor.
+
+% An applicative functor is infinite traversable iff it can be written in the form (c*a)^r for some fixed types r and c.
+
+All infini-applicatives are generated by product with a constant and reader from a constant.
+(can we prove that you can't have a in the covariant position?
+
+suppose we have p : Later f a -> f Later a. and eval = eval . p
+
+we also have eval . fmap eval = eval . p . fmap eval
+
+for functors we can write eval = eval1 . fmap eval
+
+unLater . eval1 . fmap eval = eval1 . fmap eval . p . fmap eval
+
+unLater . eval1 = eval1 . fmap eval . p
+
+p = fmap Later . unLater
+
+-- when can one write that with guarded recursive types?
+
+Now take a to be unit and we have Later f () -> f Later () that is a bisimilarity, i.e. such that eval = eval . p
+
+for all functors we require eval = eval . map eval
+
+so we have eval = eval . map eval
+
+so eval = eval . map (const ())
+
+\section{Related Work}
+
+\section{Future Work and Conclusion}
+
+
+
+
+\end{document}
