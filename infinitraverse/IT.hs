@@ -326,6 +326,7 @@ instance Sequence Tree where
 instance (Functor f, Predict f, Predict g) => Predict (Compose f g) where
   predict = Compose . fmap predict . predict . fmap getCompose
 
+{-
 data Update s a = Update {runUpdate :: (Stream s -> (Stream s,a))} deriving Functor -- stream of s to single s
 
 instance Monoid s => Applicative (Update s) where
@@ -339,7 +340,7 @@ instance Monoid s => Predict (Update s) where
   predict x = Update $ \s -> let rxs = fmap (($ s) . runUpdate) x in
    (shiftStream (fmap fst rxs), fmap snd rxs)
 
-
+-}
 
 listToStream (x:xs) = Cons x . Later $ listToStream xs
 listToStream [] = Nil
@@ -353,6 +354,7 @@ headS Nil = mempty
 tailS (Cons _ x) = x
 tailS Nil = Later Nil
 
+{-
 updateStream :: Stream (Update (Sum Int) Int)
 updateStream = listToStream [getU $ getSum . headS, putU 1 2, getU $ getSum . headS, putU 4 6, getU $ getSum . headS]
 
@@ -363,8 +365,8 @@ getU :: (Stream s -> a) -> Update s a
 getU f = Update $ \s -> (Nil, f s)
 
 goU (Update f) = f Nil
+-}
 
-instance Predict (c,) where
 
 instance Monoid s => Predict (State (Stream s)) where
   predict x = state $ \s -> let rs = fmap (`runState` s) x
@@ -382,6 +384,48 @@ stateStream :: Stream (State (Stream (Sum Int)) Int)
 stateStream = listToStream [getSum . headS <$> get, put (one 1) >> pure 2, getSum . headS <$> get, put (one 4) >> pure 6, getSum . headS <$> get]
 
 straverse g = ssequence . fmap g
+
+data Update p s a = Update {runUpdate :: s -> (p, a)} deriving Functor
+
+class (Monoid p) => ApplyAction p s
+  where
+   applyAction :: p -> s -> s
+
+instance (ApplyAction p s) => Applicative (Update p s) where
+  pure a = Update $ \_ -> (mempty, a)
+  Update u <*> Update t =
+    Update $ \s
+      -- Run the first 'Update' with the initial state
+      -- and get the monoidal action and the function out
+     ->
+      let (p, f) = u s
+      -- Run the second 'Update' with a state which has been altered by
+      -- the first action to get the 'a' and another action
+          (p', a) = t (applyAction p s)
+      -- Combine the actions together and run the function
+       in (p' <> p, f a)
+
+instance (ApplyAction p s) => Monad (Update p s) where
+  Update u >>= f =
+    Update $ \s
+      -- Run the first 'Update' with the initial state
+      -- and get the monoidal action and the function out
+     ->
+      let (p, a) = u s
+      -- Run the given function over our resulting value to get our next Update
+          Update t = f a
+      -- Run our new 'Update' over the altered state
+          (p', a') = t (applyAction p s)
+      -- Combine the actions together and return the result
+       in (p <> p', a')
+
+
+instance Predict (Update p s) where
+  predict x = Update $ \s -> ppair (($s) . runUpdate <$> x)
+    where
+      ppair :: Later (p, a) -> (p, Later a)
+      ppair p = (undefined (fst <$> p), snd <$> p)
+
 
 -- update is better than state.
 
